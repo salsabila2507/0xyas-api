@@ -138,6 +138,35 @@ h1,h2,h3{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacin
 .spam-card::before{background:linear-gradient(90deg,transparent,var(--gold),transparent)}
 .spam-card.danger{border-color:rgba(255,0,110,.2)}
 .spam-card.danger::before{background:linear-gradient(90deg,transparent,var(--pink),transparent)}
+
+/* XORA CARD */
+.xora-card{border-color:rgba(139,92,246,.2);margin-bottom:1rem;position:relative;overflow:hidden}
+.xora-card::before{background:linear-gradient(90deg,transparent,#00d4ff,transparent)}
+.xora-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem}
+.xora-title{font-size:.55rem;letter-spacing:2px;text-transform:uppercase;font-weight:700;color:#00d4ff;display:flex;align-items:center;gap:.5rem}
+.xora-trust-badge{padding:.2rem .6rem;font-size:.55rem;font-weight:700;letter-spacing:1px;border:1px solid;border-radius:2px;font-family:'Orbitron',monospace}
+.xora-trust-high{color:var(--cyan);border-color:rgba(0,255,170,.3);background:rgba(0,255,170,.08)}
+.xora-trust-mid{color:var(--gold);border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.08)}
+.xora-trust-low{color:var(--pink);border-color:rgba(255,0,110,.3);background:rgba(255,0,110,.08)}
+.xora-checks{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.7rem}
+.xora-check{display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;background:rgba(0,212,255,.02);border:1px solid rgba(0,212,255,.08);border-radius:2px;font-size:.5rem}
+.xora-check-icon{font-size:.7rem;flex-shrink:0}
+.xora-check-label{color:var(--muted);flex:1}
+.xora-check-val{font-weight:700;letter-spacing:1px}
+.xora-check-val.pass{color:var(--cyan)}
+.xora-check-val.fail{color:var(--pink)}
+.xora-check-val.warn{color:var(--gold)}
+.xora-links{margin-bottom:.5rem}
+.xora-link{font-size:.48rem;color:var(--muted);padding:.15rem 0;display:flex;align-items:center;gap:.3rem;word-break:break-all}
+.xora-link .link-icon{flex-shrink:0}
+.xora-link.official{color:var(--cyan)}
+.xora-link.fake{color:var(--pink);font-weight:700}
+.xora-ctas{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.5rem}
+.xora-cta-tag{padding:.12rem .4rem;font-size:.4rem;letter-spacing:1px;text-transform:uppercase;border:1px solid;border-radius:2px}
+.xora-cta-safe{color:var(--cyan);border-color:rgba(0,255,170,.2);background:rgba(0,255,170,.04)}
+.xora-cta-warn{color:var(--gold);border-color:rgba(251,191,36,.2);background:rgba(251,191,36,.04)}
+.xora-cta-danger{color:var(--pink);border-color:rgba(255,0,110,.2);background:rgba(255,0,110,.04)}
+.xora-summary{font-size:.55rem;color:var(--text);line-height:1.6;padding:.6rem;background:rgba(0,212,255,.02);border-left:2px solid #00d4ff;margin-top:.5rem}
 .spam-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
 .spam-title{font-size:.55rem;letter-spacing:2px;text-transform:uppercase;font-weight:700;color:var(--gold)}
 .spam-card.danger .spam-title{color:var(--pink)}
@@ -252,7 +281,8 @@ h1,h2,h3{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacin
         <div class="loading-step" id="step1"><div class="step-icon">1</div>Fetching post data</div>
         <div class="loading-step" id="step2"><div class="step-icon">2</div>Pulling engagement metrics</div>
         <div class="loading-step" id="step3"><div class="step-icon">3</div>Scanning reply patterns</div>
-        <div class="loading-step" id="step4"><div class="step-icon">4</div>Running AI analysis</div>
+        <div class="loading-step" id="step4"><div class="step-icon">4</div>Checking XORA authenticity</div>
+        <div class="loading-step" id="step5"><div class="step-icon">5</div>Running AI analysis</div>
       </div>
       <div class="loading-bar"><div class="loading-bar-fill" id="loadingBar"></div></div>
     </div>
@@ -263,6 +293,7 @@ h1,h2,h3{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacin
     <div id="engagementRow"></div>
     <div id="scoreHero"></div>
     <div id="spamCard"></div>
+    <div id="xoraSection"></div>
     <div id="metricsRow"></div>
     <div id="breakdown"></div>
     <div id="redFlags"></div>
@@ -504,6 +535,75 @@ function renderSpamCard(eng,auth){
   document.getElementById('spamCard').innerHTML=html;
 }
 
+// ── RENDER XORA ANALYSIS ──────────────────────────────────
+function renderXora(xora){
+  if(!xora||!xora.isXoraPost){document.getElementById('xoraSection').innerHTML='';return}
+
+  var ts=xora.trustScore;
+  var tc=ts>=65?'xora-trust-high':ts>=40?'xora-trust-mid':'xora-trust-low';
+  var tl=ts>=65?'TRUSTED':ts>=40?'CAUTION':'SUSPICIOUS';
+
+  // Checks grid
+  var c=xora.checks;
+  var checksHtml=
+    '<div class="xora-check"><div class="xora-check-icon">'+(c.mentionsOfficial?'✅':'❌')+'</div>'+
+    '<div class="xora-check-label">Official @xora_finance</div>'+
+    '<div class="xora-check-val '+(c.mentionsOfficial?'pass':'fail')+'">'+(c.mentionsOfficial?'YES':'NO')+'</div></div>'+
+    '<div class="xora-check"><div class="xora-check-icon">'+(c.hasOfficialLink?'✅':'⚠️')+'</div>'+
+    '<div class="xora-check-label">Official xora.finance link</div>'+
+    '<div class="xora-check-val '+(c.hasOfficialLink?'pass':'warn')+'">'+(c.hasOfficialLink?'YES':'NO')+'</div></div>'+
+    '<div class="xora-check"><div class="xora-check-icon">'+(!c.hasFakeLink?'✅':'🚨')+'</div>'+
+    '<div class="xora-check-label">Fake domain check</div>'+
+    '<div class="xora-check-val '+(c.hasFakeLink?'fail':'pass')+'">'+(c.hasFakeLink?'FAKE FOUND':'CLEAN')+'</div></div>'+
+    '<div class="xora-check"><div class="xora-check-icon">'+(!c.isImpersonator?'✅':'🚨')+'</div>'+
+    '<div class="xora-check-label">Impersonation check</div>'+
+    '<div class="xora-check-val '+(c.isImpersonator?'fail':'pass')+'">'+(c.isImpersonator?'IMPERSONATOR':'OK')+'</div></div>'+
+    '<div class="xora-check"><div class="xora-check-icon">'+(c.claimedApy&&c.claimedApy<=22?'✅':c.claimedApy?'⚠️':'➖')+'</div>'+
+    '<div class="xora-check-label">APY claim accuracy</div>'+
+    '<div class="xora-check-val '+(c.claimedApy?c.claimedApy<=22?'pass':'fail':'pass')+'">'+(c.claimedApy?c.claimedApy+'%':'N/A')+'</div></div>'+
+    '<div class="xora-check"><div class="xora-check-icon">'+(c.ctas.length<=1?'✅':c.ctas.length<=2?'⚠️':'🚨')+'</div>'+
+    '<div class="xora-check-label">CTA intensity</div>'+
+    '<div class="xora-check-val '+(c.ctas.length<=1?'pass':c.ctas.length<=2?'warn':'fail')+'">'+c.ctas.length+' CTA'+(c.ctas.length!==1?'s':'')+'</div></div>';
+
+  // Links
+  var linksHtml='';
+  if(c.links.length>0){
+    linksHtml='<div class="xora-links">';
+    c.links.forEach(function(l){
+      var isFake=/xorafinance\.com|xora-?finance\.(com|net|org|xyz|io)|xora\.(?!finance)/i.test(l);
+      var isOfficial=/xora\.finance/i.test(l);
+      var cls=isFake?'fake':isOfficial?'official':'';
+      var icon=isFake?'🚨':isOfficial?'✅':'🔗';
+      linksHtml+='<div class="xora-link '+cls+'"><span class="link-icon">'+icon+'</span>'+l+'</div>';
+    });
+    linksHtml+='</div>';
+  }
+
+  // CTAs
+  var ctasHtml='';
+  if(c.ctas.length>0){
+    ctasHtml='<div class="xora-ctas">';
+    c.ctas.forEach(function(cta){
+      var dangerCtas=['Link redirect CTA','DM solicitation','Urgency CTA','Claim CTA'];
+      var cls=dangerCtas.includes(cta)?'xora-cta-danger':cta.includes('Sign-up')||cta.includes('Deposit')?'xora-cta-warn':'xora-cta-safe';
+      ctasHtml+='<div class="xora-cta-tag '+cls+'">'+cta+'</div>';
+    });
+    ctasHtml+='</div>';
+  }
+
+  var html='<div class="card xora-card">'+
+    '<div class="xora-header">'+
+      '<div class="xora-title">🔬 XORA.FINANCE ANALYSIS</div>'+
+      '<div class="xora-trust-badge '+tc+'">'+tl+' ('+ts+')</div>'+
+    '</div>'+
+    '<div class="xora-checks">'+checksHtml+'</div>'+
+    linksHtml+
+    ctasHtml+
+    '<div class="xora-summary">'+xora.summary+'</div>'+
+  '</div>';
+  document.getElementById('xoraSection').innerHTML=html;
+}
+
 // ── RENDER LLM ───────────────────────────────────────────
 function renderLlm(llm){
   if(!llm){document.getElementById('llmSection').innerHTML='';return}
@@ -553,7 +653,7 @@ function setStep(n,txt){
     if(i===n-1)s.classList.add('active');
   });
   if(txt)document.getElementById('loadingText').textContent=txt;
-  document.getElementById('loadingBar').style.width=(n/4*100)+'%';
+  document.getElementById('loadingBar').style.width=(n/5*100)+'%';
 }
 
 // ── ANALYZE ──────────────────────────────────────────────
@@ -592,8 +692,12 @@ function analyzePost(){
     renderFlags(d.authenticity);
     renderSpamCard(d.engagement||{},d.authenticity);
 
-    // Step 4 - LLM
-    setStep(4,'Running AI analysis...');
+    // Step 4 - XORA
+    setStep(4,'Checking XORA authenticity...');
+    renderXora(d.xora);
+
+    // Step 5 - LLM
+    setStep(5,'Running AI analysis...');
     return callGemini(d.post.text,d.post.author).then(function(llm){renderLlm(llm)});
   }).then(function(){
     document.getElementById('loadingBar').style.width='100%';

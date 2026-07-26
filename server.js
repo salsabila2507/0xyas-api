@@ -256,6 +256,188 @@ function detectSentiment(text) {
   return 'neutral';
 }
 
+// ── XORA.FINANCE SPECIFIC ANALYSIS ──────────────────────────
+function analyzeXora(text, authorHandle, url) {
+  // Only runs if post is about XORA
+  const isXoraRelated = /xora|xrp\s*neobank|xora_finance|xora\.finance/i.test(text) ||
+                        /xora\.finance/i.test(url);
+  if (!isXoraRelated) return null;
+
+  const officialHandle = 'xora_finance';
+  const officialDomain = 'xora.finance';
+  const flags = [];
+  const greenFlags = [];
+  const checks = {};
+  let trustScore = 50; // neutral start
+
+  // ── 1. Official account mention ──
+  const mentionsOfficial = /@xora_finance/i.test(text) || /xora_finance/i.test(text);
+  checks.mentionsOfficial = mentionsOfficial;
+  if (mentionsOfficial) {
+    greenFlags.push('Mentions official @xora_finance account');
+    trustScore += 15;
+  } else {
+    flags.push('Does NOT mention @xora_finance — could be impersonator');
+    trustScore -= 10;
+  }
+
+  // ── 2. Link analysis ──
+  const links = text.match(/https?:\/\/[^\s]+/gi) || [];
+  checks.links = links;
+  checks.linkCount = links.length;
+
+  const hasOfficialLink = links.some(l => /xora\.finance/i.test(l));
+  const hasFakeLink = links.some(l =>
+    /xorafinance\.com/i.test(l) ||
+    /xora-?finance\.(com|net|org|xyz|io)/i.test(l) ||
+    /xora\.(?!finance)/i.test(l)
+  );
+  const hasScamLink = links.some(l =>
+    /bit\.ly|tinyurl|t\.co/i.test(l) && !l.includes('t.co/') // shortened but not X native
+  );
+
+  checks.hasOfficialLink = hasOfficialLink;
+  checks.hasFakeLink = hasFakeLink;
+
+  if (hasOfficialLink) {
+    greenFlags.push('Links to official xora.finance domain');
+    trustScore += 15;
+  }
+  if (hasFakeLink) {
+    flags.push('Contains FAKE XORA domain — HIGH scam risk');
+    trustScore -= 30;
+  }
+  if (hasScamLink) {
+    flags.push('Uses shortened/suspicious link — verify destination');
+    trustScore -= 10;
+  }
+  if (links.length === 0) {
+    greenFlags.push('No external links — lower phishing risk');
+  }
+
+  // ── 3. CTA (Call to Action) analysis ──
+  const ctaPatterns = [
+    { re: /sign\s*up|register|join|open\s*(your)?\s*account/i, label: 'Sign-up CTA' },
+    { re: /deposit|send\s*xrp|transfer/i, label: 'Deposit CTA' },
+    { re: /click\s*(the\s*)?link|link\s*in\s*(bio|thread|comments)/i, label: 'Link redirect CTA' },
+    { re: /dm\s*(me|for)|message\s*me/i, label: 'DM solicitation' },
+    { re: /limited\s*time|hurry|act\s*now|last\s*chance|ending\s*soon/i, label: 'Urgency CTA' },
+    { re: /follow.*like.*rt|like.*retweet.*follow|rt\s*&?\s*follow/i, label: 'Engagement bait CTA' },
+    { re: /whitelist|wl\s*spot|guaranteed\s*spot/i, label: 'Whitelist CTA' },
+    { re: /claim|claim\s*now|claim\s*your/i, label: 'Claim CTA' },
+  ];
+
+  const detectedCtas = [];
+  ctaPatterns.forEach(p => {
+    if (p.re.test(text)) {
+      detectedCtas.push(p.label);
+    }
+  });
+  checks.ctas = detectedCtas;
+
+  // High-risk CTAs
+  const highRiskCtas = ['Link redirect CTA', 'DM solicitation', 'Urgency CTA', 'Claim CTA'];
+  const hasHighRiskCta = detectedCtas.some(c => highRiskCtas.includes(c));
+  if (hasHighRiskCta) {
+    flags.push('High-risk CTA detected: ' + detectedCtas.filter(c => highRiskCtas.includes(c)).join(', '));
+    trustScore -= 15;
+  }
+  if (detectedCtas.length > 2) {
+    flags.push('Multiple CTAs (' + detectedCtas.length + ') — aggressive promotion pattern');
+    trustScore -= 5;
+  }
+  if (detectedCtas.length === 0) {
+    greenFlags.push('No aggressive CTAs detected');
+    trustScore += 5;
+  }
+
+  // ── 4. Hashtag analysis ──
+  const xoraHashtags = (text.match(/#xora|#xorafinance|#xrpl|#xrp\s*neobank|#xora\s*finance/gi) || []);
+  const spammyHashtags = (text.match(/#crypto|#defi|#airdrop|#giveaway|#whitelist|#freemoney|#passive\s*income/gi) || []);
+  checks.xoraHashtags = xoraHashtags;
+  checks.spammyHashtags = spammyHashtags;
+
+  if (xoraHashtags.length > 0) {
+    greenFlags.push('Uses relevant XORA/XRP hashtags');
+    trustScore += 5;
+  }
+  if (spammyHashtags.length > 2) {
+    flags.push('Spammy hashtag cluster: ' + spammyHashtags.slice(0, 3).join(', '));
+    trustScore -= 10;
+  }
+
+  // ── 5. APY / yield claims ──
+  const apyMatch = text.match(/(\d+(?:\.\d+)?)\s*%\s*(?:apy|apy\s*value|yield)/i);
+  checks.claimedApy = apyMatch ? parseFloat(apyMatch[1]) : null;
+  if (apyMatch) {
+    const claimed = parseFloat(apyMatch[1]);
+    if (claimed > 25) {
+      flags.push('Claims ' + claimed + '% APY — exceeds official 22% maximum');
+      trustScore -= 15;
+    } else if (claimed <= 22) {
+      greenFlags.push('APY claim (' + claimed + '%) within official range');
+      trustScore += 5;
+    }
+  }
+
+  // ── 6. Impersonation check ──
+  const authorLower = (authorHandle || '').toLowerCase().replace('@', '');
+  const isImpersonator = /xora/i.test(authorLower) && authorLower !== officialHandle;
+  checks.isImpersonator = isImpersonator;
+  if (isImpersonator) {
+    flags.push('Author @' + authorLower + ' may impersonate official @' + officialHandle);
+    trustScore -= 20;
+  }
+
+  // ── 7. Scam keyword check ──
+  const scamPatterns = [
+    /guaranteed\s*profit/i,
+    /risk[\s-]*free/i,
+    /double\s*(your|my)\s*(xrp|crypto)/i,
+    /send\s*\d+.*get\s*\d+/i,
+    /seed\s*phrase|private\s*key|mnemonic/i,
+    /pre[\s-]*order.*card/i,
+    /kyc\s*bypass|no\s*kyc/i,
+  ];
+  scamPatterns.forEach(p => {
+    if (p.test(text)) {
+      flags.push('Scam keyword pattern: ' + p.source.slice(0, 30) + '...');
+      trustScore -= 15;
+    }
+  });
+
+  // Clamp trust score
+  trustScore = Math.max(0, Math.min(100, trustScore));
+
+  return {
+    isXoraPost: true,
+    trustScore,
+    trafficLight: trustScore >= 65 ? 'green' : trustScore >= 40 ? 'yellow' : 'red',
+    checks,
+    flags,
+    greenFlags,
+    summary: generateXoraSummary(checks, flags, greenFlags, trustScore)
+  };
+}
+
+function generateXoraSummary(checks, flags, greenFlags, score) {
+  const parts = [];
+  if (checks.mentionsOfficial) {
+    parts.push('Post references the official @xora_finance account');
+  } else {
+    parts.push('Post does NOT reference @xora_finance — proceed with caution');
+  }
+  if (checks.hasOfficialLink) parts.push('Contains verified xora.finance link');
+  if (checks.hasFakeLink) parts.push('⚠ Contains a fake/cloned XORA domain');
+  if (checks.ctas.length > 0) parts.push('CTAs detected: ' + checks.ctas.join(', '));
+  if (checks.claimedApy) {
+    if (checks.claimedApy > 22) parts.push('APY claim exceeds official maximum');
+    else parts.push('APY claim within official range');
+  }
+  if (checks.isImpersonator) parts.push('Author may be impersonating XORA');
+  return parts.join('. ') + '. Trust score: ' + score + '/100.';
+}
+
 // ── API ──────────────────────────────────────────────────────
 app.post('/api/analyze', async (req, res) => {
   const { url } = req.body;
@@ -315,11 +497,13 @@ app.post('/api/analyze', async (req, res) => {
 
     // Analyze
     const auth = analyzeFromText(parsed.text || '', postInfo.author, engagement);
+    const xora = analyzeXora(parsed.text || '', postInfo.authorHandle, url);
 
     res.json({
       ok: true,
       post: postInfo,
       authenticity: auth,
+      xora: xora,
       engagement: engagement || {},
       source: syndication ? 'syndication+scrape' : 'oembed+scrape'
     });
