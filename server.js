@@ -1057,6 +1057,16 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 function buildAnalysisPrompt(text, author) {
   return 'Analyze this X/Twitter post for authenticity. Respond ONLY with valid JSON, no markdown.\n' +
     'Post by: ' + author + '\nContent: """' + text + '"""\n\n' +
+    'You judge HOW the post is written and how its engagement behaves. You are not\n' +
+    'a fact checker of record. Rules about factual claims:\n' +
+    '- Use the search tool before saying anything about whether a claim is true.\n' +
+    '- If search confirms the claim, do not list it as a red flag.\n' +
+    '- If you cannot confirm or refute it, say it is unverified. Never call a claim\n' +
+    '  false, fake news, or misinformation on the basis that you have not heard of it.\n' +
+    '  Exchange shutdowns, delistings and similar events happen constantly and are\n' +
+    '  usually outside your training data.\n' +
+    '- Reserve red flags for things visible in the post itself: engagement farming,\n' +
+    '  urgency pressure, impersonation, phishing links, unrealistic guaranteed returns.\n\n' +
     'JSON schema:\n' +
     '{"tone":"one word","clickbait_score":0-100,"clickbait_explanation":"string",' +
     '"sentiment":"positive|negative|neutral|mixed","sentiment_detail":"one sentence",' +
@@ -1079,6 +1089,9 @@ app.post('/api/llm', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: buildAnalysisPrompt(text, author) }] }],
+        // Grounding: without it the model rules on current events from memory
+        // alone and calls real shutdowns "false news".
+        tools: [{ google_search: {} }],
         // 2.5-flash spends "thinking" tokens from the same budget; 800 was
         // truncating the JSON mid-string
         generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
