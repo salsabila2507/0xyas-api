@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 
 // Secrets live in .env (gitignored), never in the client bundle.
-// Missing file is fine — the process env may already carry them.
+// Missing file is fine, the process env may already carry them.
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch (_) {}
 
 const app = express();
@@ -96,7 +96,7 @@ function fmtNum(n) {
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 // ══════════════════════════════════════════════════════════════
-// VISIBLE TEXT EXTRACTION — strip URLs, t.co, media, quotes
+// VISIBLE TEXT EXTRACTION, strip URLs, t.co, media, quotes
 // ══════════════════════════════════════════════════════════════
 
 function extractVisibleText(text) {
@@ -118,27 +118,27 @@ function countVisibleChars(text) {
 }
 
 // ══════════════════════════════════════════════════════════════
-// CTA CLASSIFICATION — None / Soft / Strong with explanation
+// CTA CLASSIFICATION, None / Soft / Strong with explanation
 // ══════════════════════════════════════════════════════════════
 
 function classifyCtas(text) {
   const patterns = [
-    { re: /follow\s+back/i, strength: 'strong', label: 'Follow-back request', explanation: 'Asks for follows in exchange — direct engagement farming' },
-    { re: /like\s+and\s+(rt|retweet)|rt\s*&?\s*like|retweet.*follow/i, strength: 'strong', label: 'Like+RT combo', explanation: 'Demands multiple engagement actions — aggressive farming' },
-    { re: /follow.*like.*comment|like.*comment.*follow/i, strength: 'strong', label: 'Triple engagement bait', explanation: 'Requests follow+like+comment — maximum farming attempt' },
-    { re: /giveaway/i, strength: 'strong', label: 'Giveaway', explanation: 'Giveaway content — typically used to farm engagement' },
-    { re: /airdrop.*follow|follow.*airdrop/i, strength: 'strong', label: 'Airdrop+follow', explanation: 'Airdrop promise tied to follows — common scam/bot pattern' },
-    { re: /dm\s+(me|for)|message\s+me/i, strength: 'strong', label: 'DM solicitation', explanation: 'Directs users to DM — common in scam funnels' },
-    { re: /whitelist|wl\s+spot|guaranteed\s+spot/i, strength: 'strong', label: 'Whitelist/spot promise', explanation: 'Promises guaranteed access — engagement bait' },
-    { re: /click\s*(the\s*)?link|link\s+in\s+(bio|thread|comments)/i, strength: 'strong', label: 'Link redirect', explanation: 'Directs to external link — potential phishing or redirect scam' },
-    { re: /limited\s+time|act\s+now|last\s+chance|ending\s+soon|hurry/i, strength: 'strong', label: 'Urgency language', explanation: 'Creates artificial urgency — manipulation tactic' },
-    { re: /guaranteed|100%\s+profit|risk[- ]free|no\s+loss/i, strength: 'strong', label: 'Unrealistic claims', explanation: 'Promises guaranteed returns — classic scam indicator' },
-    { re: /claim\s+now|claim\s+your|claim\s+this/i, strength: 'strong', label: 'Claim CTA', explanation: 'Urges immediate claiming — phishing or scam signal' },
-    { re: /sign\s+up|register|join\s+now|open\s*(your)?\s*account/i, strength: 'soft', label: 'Sign-up prompt', explanation: 'Invites registration — promotional but not necessarily malicious' },
-    { re: /deposit|send\s+xrp|transfer/i, strength: 'soft', label: 'Deposit/transfer prompt', explanation: 'Moves funds — legitimate in product context but watch for urgency' },
-    { re: /check\s+out|look\s+at|see\s+this/i, strength: 'soft', label: 'Soft promotion', explanation: 'Casual recommendation — low-intensity CTA' },
-    { re: /subscribe|join\s+my|follow\s+me/i, strength: 'soft', label: 'Self-promotion', explanation: 'Asks for follows/subscribes — common but mild farming' },
-    { re: /what\s+do\s+you\s+think|thoughts\?|agree\?/i, strength: 'none', label: 'Discussion prompt', explanation: 'Genuine engagement question — not a farming CTA' },
+    { re: /follow\s+back/i, strength: 'strong', label: 'Follow-back request', explanation: 'Asks for follows in exchange, direct engagement farming' },
+    { re: /like\s+and\s+(rt|retweet)|rt\s*&?\s*like|retweet.*follow/i, strength: 'strong', label: 'Like+RT combo', explanation: 'Demands multiple engagement actions, aggressive farming' },
+    { re: /follow.*like.*comment|like.*comment.*follow/i, strength: 'strong', label: 'Triple engagement bait', explanation: 'Requests follow+like+comment, maximum farming attempt' },
+    { re: /giveaway/i, strength: 'strong', label: 'Giveaway', explanation: 'Giveaway content, typically used to farm engagement' },
+    { re: /airdrop.*follow|follow.*airdrop/i, strength: 'strong', label: 'Airdrop+follow', explanation: 'Airdrop promise tied to follows, common scam/bot pattern' },
+    { re: /dm\s+(me|for)|message\s+me/i, strength: 'strong', label: 'DM solicitation', explanation: 'Directs users to DM, common in scam funnels' },
+    { re: /whitelist|wl\s+spot|guaranteed\s+spot/i, strength: 'strong', label: 'Whitelist/spot promise', explanation: 'Promises guaranteed access, engagement bait' },
+    { re: /click\s*(the\s*)?link|link\s+in\s+(bio|thread|comments)/i, strength: 'strong', label: 'Link redirect', explanation: 'Directs to external link, potential phishing or redirect scam' },
+    { re: /limited\s+time|act\s+now|last\s+chance|ending\s+soon|hurry/i, strength: 'strong', label: 'Urgency language', explanation: 'Creates artificial urgency, manipulation tactic' },
+    { re: /guaranteed|100%\s+profit|risk[- ]free|no\s+loss/i, strength: 'strong', label: 'Unrealistic claims', explanation: 'Promises guaranteed returns, classic scam indicator' },
+    { re: /claim\s+now|claim\s+your|claim\s+this/i, strength: 'strong', label: 'Claim CTA', explanation: 'Urges immediate claiming, phishing or scam signal' },
+    { re: /sign\s+up|register|join\s+now|open\s*(your)?\s*account/i, strength: 'soft', label: 'Sign-up prompt', explanation: 'Invites registration, promotional but not necessarily malicious' },
+    { re: /deposit|send\s+xrp|transfer/i, strength: 'soft', label: 'Deposit/transfer prompt', explanation: 'Moves funds, legitimate in product context but watch for urgency' },
+    { re: /check\s+out|look\s+at|see\s+this/i, strength: 'soft', label: 'Soft promotion', explanation: 'Casual recommendation, low-intensity CTA' },
+    { re: /subscribe|join\s+my|follow\s+me/i, strength: 'soft', label: 'Self-promotion', explanation: 'Asks for follows/subscribes, common but mild farming' },
+    { re: /what\s+do\s+you\s+think|thoughts\?|agree\?/i, strength: 'none', label: 'Discussion prompt', explanation: 'Genuine engagement question, not a farming CTA' },
   ];
 
   const detected = [];
@@ -164,19 +164,19 @@ function classifyCtas(text) {
 function evaluateContentQuality(text, visibleWords) {
   const checks = [];
 
-  // Originality — is it original or just a RT/quote?
+  // Originality, is it original or just a RT/quote?
   const isRetweet = /^(RT|QT|cc)\s*[:@]/i.test(text) || /retweeted/i.test(text);
   if (isRetweet) {
-    checks.push({ cat: 'Originality', score: 0, max: 10, detail: 'Appears to be a retweet/quote — not original content' });
+    checks.push({ cat: 'Originality', score: 0, max: 10, detail: 'Appears to be a retweet/quote, not original content' });
   } else if (visibleWords > 15) {
     checks.push({ cat: 'Originality', score: 8, max: 10, detail: 'Original substantive content (' + visibleWords + ' visible words)' });
   } else if (visibleWords > 8) {
     checks.push({ cat: 'Originality', score: 5, max: 10, detail: 'Short original content (' + visibleWords + ' words)' });
   } else {
-    checks.push({ cat: 'Originality', score: 2, max: 10, detail: 'Very short — limited originality signal' });
+    checks.push({ cat: 'Originality', score: 2, max: 10, detail: 'Very short, limited originality signal' });
   }
 
-  // Clarity — sentence structure, punctuation
+  // Clarity, sentence structure, punctuation
   const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 3);
   const avgSentenceLen = sentences.length > 0 ? visibleWords / sentences.length : 0;
   const hasQuestion = /\?/.test(text);
@@ -189,11 +189,11 @@ function evaluateContentQuality(text, visibleWords) {
     checks.push({ cat: 'Clarity', score: 3, max: 10, detail: 'No clear sentence structure' });
   }
 
-  // Educational value — does it explain something?
+  // Educational value, does it explain something?
   const educationalSignals = /because|since|therefore|however|for example|in other words|means that|this is|the reason|explains|how to|step|guide|tip|learn|understand|important|key|note that/i;
   const hasEducational = educationalSignals.test(text);
   if (hasEducational && visibleWords > 20) {
-    checks.push({ cat: 'Educational Value', score: 9, max: 10, detail: 'Contains explanatory language — informative content' });
+    checks.push({ cat: 'Educational Value', score: 9, max: 10, detail: 'Contains explanatory language, informative content' });
   } else if (hasEducational) {
     checks.push({ cat: 'Educational Value', score: 6, max: 10, detail: 'Some educational signals but brief' });
   } else if (visibleWords > 30) {
@@ -202,7 +202,7 @@ function evaluateContentQuality(text, visibleWords) {
     checks.push({ cat: 'Educational Value', score: 2, max: 10, detail: 'No educational signals detected' });
   }
 
-  // Readability — word complexity
+  // Readability, word complexity
   const words = extractVisibleText(text).split(/\s+/).filter(w => w.length > 0);
   const avgWordLen = words.length > 0 ? words.reduce((s, w) => s + w.length, 0) / words.length : 0;
   const longWords = words.filter(w => w.length > 8).length;
@@ -215,7 +215,7 @@ function evaluateContentQuality(text, visibleWords) {
     checks.push({ cat: 'Readability', score: 3, max: 10, detail: 'Complex language (avg ' + avgWordLen.toFixed(1) + ' chars/word)' });
   }
 
-  // Structure — does it have formatting?
+  // Structure, does it have formatting?
   const hasList = /[-•▪]\s|^\d+[.)]\s/m.test(text);
   const hasNewlines = /\n/.test(text);
   const hasEmoji = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}]/u.test(text);
@@ -234,7 +234,7 @@ function detectLowQualityPatterns(text, ctaResult) {
 
   // Engagement farming
   if (ctaResult.strongCount >= 2) {
-    flags.push({ pattern: 'Multi-CTA farming', severity: 'high', detail: ctaResult.strongCount + ' strong CTAs detected — aggressive engagement farming' });
+    flags.push({ pattern: 'Multi-CTA farming', severity: 'high', detail: ctaResult.strongCount + ' strong CTAs detected, aggressive engagement farming' });
   } else if (ctaResult.strongCount === 1) {
     flags.push({ pattern: 'Single strong CTA', severity: 'medium', detail: 'One strong CTA present: ' + ctaResult.detected.find(c => c.strength === 'strong')?.label });
   }
@@ -242,22 +242,22 @@ function detectLowQualityPatterns(text, ctaResult) {
   // Keyword stuffing
   const hashtags = (text.match(/#/g) || []).length;
   if (hashtags > 8) {
-    flags.push({ pattern: 'Hashtag stuffing', severity: 'high', detail: hashtags + ' hashtags — extreme keyword stuffing' });
+    flags.push({ pattern: 'Hashtag stuffing', severity: 'high', detail: hashtags + ' hashtags, extreme keyword stuffing' });
   } else if (hashtags > 4) {
-    flags.push({ pattern: 'Excessive hashtags', severity: 'medium', detail: hashtags + ' hashtags — above normal usage' });
+    flags.push({ pattern: 'Excessive hashtags', severity: 'medium', detail: hashtags + ' hashtags, above normal usage' });
   }
 
   // Emoji spam
   const emojis = (text.match(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu) || []).length;
   if (emojis > 15) {
-    flags.push({ pattern: 'Emoji spam', severity: 'medium', detail: emojis + ' emojis — excessive, low-quality signal' });
+    flags.push({ pattern: 'Emoji spam', severity: 'medium', detail: emojis + ' emojis, excessive, low-quality signal' });
   }
 
   // Shouting (excessive uppercase)
   const letters = (text.match(/[a-zA-Z]/g) || []).length;
   const uppers = (text.match(/[A-Z]/g) || []).length;
   if (letters > 10 && uppers / letters > 0.7) {
-    flags.push({ pattern: 'Excessive uppercase', severity: 'medium', detail: Math.round(uppers / letters * 100) + '% uppercase — aggressive tone' });
+    flags.push({ pattern: 'Excessive uppercase', severity: 'medium', detail: Math.round(uppers / letters * 100) + '% uppercase, aggressive tone' });
   }
 
   // Repetitive template patterns
@@ -283,26 +283,26 @@ function detectLowQualityPatterns(text, ctaResult) {
   ];
   scamPatterns.forEach(sp => {
     if (sp.re.test(text)) {
-      flags.push({ pattern: 'Scam indicator', severity: 'critical', detail: sp.label + ' — classic fraud pattern' });
+      flags.push({ pattern: 'Scam indicator', severity: 'critical', detail: sp.label + ', classic fraud pattern' });
     }
   });
 
   // Suspicious posting behavior signals
   const links = (text.match(/https?:\/\/[^\s]+/gi) || []).length;
   if (links > 3) {
-    flags.push({ pattern: 'Link spam', severity: 'medium', detail: links + ' links in one post — excessive' });
+    flags.push({ pattern: 'Link spam', severity: 'medium', detail: links + ' links in one post, excessive' });
   }
 
   const urgentWords = (lowerText.match(/limited time|act now|last chance|hurry|ending soon|don't miss/i) || []).length;
   if (urgentWords >= 2) {
-    flags.push({ pattern: 'Urgency stacking', severity: 'high', detail: urgentWords + ' urgency phrases — pressure tactic' });
+    flags.push({ pattern: 'Urgency stacking', severity: 'high', detail: urgentWords + ' urgency phrases, pressure tactic' });
   }
 
   return flags;
 }
 
 // ══════════════════════════════════════════════════════════════
-// ENGAGEMENT INTERPRETATION — explain what ratios mean
+// ENGAGEMENT INTERPRETATION, explain what ratios mean
 // ══════════════════════════════════════════════════════════════
 
 function interpretEngagement(eng) {
@@ -313,56 +313,56 @@ function interpretEngagement(eng) {
   if (views != null && likes != null && views > 100) {
     const engRate = ((likes + (replies || 0) + (retweets || 0)) / views * 100);
     let meaning;
-    if (engRate > 25) meaning = 'Unusually high — likely amplified by bots or coordinated accounts';
-    else if (engRate > 8) meaning = 'Strong organic engagement — audience actively interacting';
-    else if (engRate > 3) meaning = 'Decent engagement — normal for established accounts';
-    else if (engRate > 1) meaning = 'Below average — passive audience or low reach';
-    else if (engRate > 0.1) meaning = 'Very low engagement relative to views — may indicate botted views';
-    else meaning = 'Near-zero engagement — possible ghost traffic';
+    if (engRate > 25) meaning = 'Unusually high, likely amplified by bots or coordinated accounts';
+    else if (engRate > 8) meaning = 'Strong organic engagement, audience actively interacting';
+    else if (engRate > 3) meaning = 'Decent engagement, normal for established accounts';
+    else if (engRate > 1) meaning = 'Below average, passive audience or low reach';
+    else if (engRate > 0.1) meaning = 'Very low engagement relative to views, may indicate botted views';
+    else meaning = 'Near-zero engagement, possible ghost traffic';
     interp.push({ metric: 'Engagement Rate', value: engRate.toFixed(2) + '%', meaning });
   }
 
   if (replies != null && likes != null && likes > 0) {
     const ratio = replies / likes;
     let meaning;
-    if (ratio > 5) meaning = 'Extreme — replies vastly exceed likes, suggesting spam replies or heated controversy';
-    else if (ratio > 3) meaning = 'Very high — likely spam replies or polarizing content generating heated debate';
-    else if (ratio > 1.5) meaning = 'Above average — active discussion, could be genuine debate or mild spam';
-    else if (ratio > 0.3) meaning = 'Healthy — real conversations happening alongside likes';
-    else if (ratio > 0.05) meaning = 'Low — audience prefers liking over discussing';
-    else meaning = 'Very low — passive audience, content consumed but not discussed';
+    if (ratio > 5) meaning = 'Extreme, replies vastly exceed likes, suggesting spam replies or heated controversy';
+    else if (ratio > 3) meaning = 'Very high, likely spam replies or polarizing content generating heated debate';
+    else if (ratio > 1.5) meaning = 'Above average, active discussion, could be genuine debate or mild spam';
+    else if (ratio > 0.3) meaning = 'Healthy, real conversations happening alongside likes';
+    else if (ratio > 0.05) meaning = 'Low, audience prefers liking over discussing';
+    else meaning = 'Very low, passive audience, content consumed but not discussed';
     interp.push({ metric: 'Reply/Like Ratio', value: ratio.toFixed(2) + 'x', meaning });
   }
 
   if (retweets != null && likes != null && likes > 0) {
     const ratio = retweets / likes;
     let meaning;
-    if (ratio > 5) meaning = 'Abnormal — retweets massively exceed likes, strong farming signal';
-    else if (ratio > 2) meaning = 'High — content is shared more than appreciated, possible forced virality';
-    else if (ratio > 0.5) meaning = 'Balanced — normal sharing pattern';
-    else if (ratio > 0.1) meaning = 'Like-heavy — content appreciated but not widely shared';
-    else meaning = 'Minimal sharing — consumed but not redistributed';
+    if (ratio > 5) meaning = 'Abnormal, retweets massively exceed likes, strong farming signal';
+    else if (ratio > 2) meaning = 'High, content is shared more than appreciated, possible forced virality';
+    else if (ratio > 0.5) meaning = 'Balanced, normal sharing pattern';
+    else if (ratio > 0.1) meaning = 'Like-heavy, content appreciated but not widely shared';
+    else meaning = 'Minimal sharing, consumed but not redistributed';
     interp.push({ metric: 'RT/Like Ratio', value: ratio.toFixed(2) + 'x', meaning });
   }
 
   if (quotes != null && replies != null && quotes > 0 && replies > 0) {
     const ratio = quotes / replies;
     let meaning;
-    if (ratio > 3) meaning = 'Content is quoted far more than replied to — likely controversial or viral-bait';
-    else if (ratio > 1) meaning = 'Active quote engagement — sparking broader conversation';
-    else meaning = 'Replies dominate — direct conversation preferred over quoting';
+    if (ratio > 3) meaning = 'Content is quoted far more than replied to, likely controversial or viral-bait';
+    else if (ratio > 1) meaning = 'Active quote engagement, sparking broader conversation';
+    else meaning = 'Replies dominate, direct conversation preferred over quoting';
     interp.push({ metric: 'Quote/Reply Ratio', value: ratio.toFixed(2) + 'x', meaning });
   }
 
   if (views != null && likes != null && views > 10000 && likes < 5) {
-    interp.push({ metric: 'Ghost Traffic', value: fmtNum(views) + ' views / ' + (likes || 0) + ' likes', meaning: 'High views with near-zero likes — almost certainly botted views' });
+    interp.push({ metric: 'Ghost Traffic', value: fmtNum(views) + ' views / ' + (likes || 0) + ' likes', meaning: 'High views with near-zero likes, almost certainly botted views' });
   }
 
   return interp;
 }
 
 // ══════════════════════════════════════════════════════════════
-// MAIN ANALYSIS ENGINE — transparent weighted scoring
+// MAIN ANALYSIS ENGINE, transparent weighted scoring
 // ══════════════════════════════════════════════════════════════
 
 function analyzePost(text, author, engagement) {
@@ -407,8 +407,8 @@ function analyzePost(text, author, engagement) {
   const cqDetails = [];
 
   // Word count contribution (0-10)
-  if (visibleWords <= 3) { cqScore += 0; cqDetails.push('Extremely short (' + visibleWords + ' words) — no substance'); }
-  else if (visibleWords <= 8) { cqScore += 2; cqDetails.push('Very short (' + visibleWords + ' words) — minimal content'); }
+  if (visibleWords <= 3) { cqScore += 0; cqDetails.push('Extremely short (' + visibleWords + ' words), no substance'); }
+  else if (visibleWords <= 8) { cqScore += 2; cqDetails.push('Very short (' + visibleWords + ' words), minimal content'); }
   else if (visibleWords <= 15) { cqScore += 4; cqDetails.push('Short post (' + visibleWords + ' words)'); }
   else if (visibleWords <= 30) { cqScore += 7; cqDetails.push('Moderate content (' + visibleWords + ' words)'); }
   else { cqScore += 10; cqDetails.push('Substantial content (' + visibleWords + ' words)'); }
@@ -423,7 +423,7 @@ function analyzePost(text, author, engagement) {
 
   // Originality bonus (0-5)
   const isRetweet = /^(RT|QT|cc)\s*[:@]/i.test(text);
-  if (isRetweet) { cqScore += 0; cqDetails.push('Retweet/quote — not original'); }
+  if (isRetweet) { cqScore += 0; cqDetails.push('Retweet/quote, not original'); }
   else if (visibleWords > 15 && !/follow|like|rt|retweet|giveaway/i.test(visibleText)) { cqScore += 5; cqDetails.push('Original content'); }
   else if (visibleWords > 8) { cqScore += 3; cqDetails.push('Likely original'); }
   else { cqScore += 1; cqDetails.push('Too short to assess originality'); }
@@ -446,30 +446,30 @@ function analyzePost(text, author, engagement) {
     // Engagement rate (−8 to +8)
     if (views != null && likes != null && views > 100) {
       const engRate = ((likes + (replies || 0) + (retweets || 0)) / views * 100);
-      if (engRate > 25) { eaScore -= 8; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '% — abnormally high, possible amplification'); }
-      else if (engRate > 8) { eaScore += 8; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '% — strong organic interaction'); }
-      else if (engRate > 3) { eaScore += 4; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '% — decent'); }
-      else if (engRate < 0.5 && views > 5000) { eaScore -= 5; eaDetails.push('Engagement rate ' + engRate.toFixed(2) + '% with ' + fmtNum(views) + ' views — possible botted views'); }
-      else { eaDetails.push('Engagement rate ' + engRate.toFixed(2) + '% — below average'); }
+      if (engRate > 25) { eaScore -= 8; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '%, abnormally high, possible amplification'); }
+      else if (engRate > 8) { eaScore += 8; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '%, strong organic interaction'); }
+      else if (engRate > 3) { eaScore += 4; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '%, decent'); }
+      else if (engRate < 0.5 && views > 5000) { eaScore -= 5; eaDetails.push('Engagement rate ' + engRate.toFixed(2) + '% with ' + fmtNum(views) + ' views, possible botted views'); }
+      else { eaDetails.push('Engagement rate ' + engRate.toFixed(2) + '%, below average'); }
     }
 
     // Reply quality (−10 to +6)
     if (replies != null && likes != null && likes > 0) {
       const rl = replies / likes;
-      if (rl > 5) { eaScore -= 10; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x — extreme, likely spam replies'); }
-      else if (rl > 3) { eaScore -= 7; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x — high, spam or controversy'); }
-      else if (rl > 1.5) { eaScore -= 2; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x — active discussion'); }
-      else if (rl > 0.3) { eaScore += 6; eaDetails.push('Reply/like ' + rl.toFixed(2) + 'x — healthy conversation'); }
-      else { eaScore += 1; eaDetails.push('Reply/like ' + rl.toFixed(2) + 'x — passive audience'); }
+      if (rl > 5) { eaScore -= 10; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x, extreme, likely spam replies'); }
+      else if (rl > 3) { eaScore -= 7; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x, high, spam or controversy'); }
+      else if (rl > 1.5) { eaScore -= 2; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x, active discussion'); }
+      else if (rl > 0.3) { eaScore += 6; eaDetails.push('Reply/like ' + rl.toFixed(2) + 'x, healthy conversation'); }
+      else { eaScore += 1; eaDetails.push('Reply/like ' + rl.toFixed(2) + 'x, passive audience'); }
     }
 
     // RT farming (−8 to +5)
     if (retweets != null && likes != null && likes > 0) {
       const rt = retweets / likes;
-      if (rt > 5) { eaScore -= 8; eaDetails.push('RT/like ' + rt.toFixed(1) + 'x — retweet farming'); }
-      else if (rt > 2) { eaScore -= 4; eaDetails.push('RT/like ' + rt.toFixed(1) + 'x — high, possible forced sharing'); }
-      else if (rt < 0.3 && likes > 50) { eaScore += 5; eaDetails.push('RT/like ' + rt.toFixed(2) + 'x — organic appreciation'); }
-      else { eaDetails.push('RT/like ' + rt.toFixed(2) + 'x — normal pattern'); }
+      if (rt > 5) { eaScore -= 8; eaDetails.push('RT/like ' + rt.toFixed(1) + 'x, retweet farming'); }
+      else if (rt > 2) { eaScore -= 4; eaDetails.push('RT/like ' + rt.toFixed(1) + 'x, high, possible forced sharing'); }
+      else if (rt < 0.3 && likes > 50) { eaScore += 5; eaDetails.push('RT/like ' + rt.toFixed(2) + 'x, organic appreciation'); }
+      else { eaDetails.push('RT/like ' + rt.toFixed(2) + 'x, normal pattern'); }
     }
 
     // Ghost traffic (−8)
@@ -479,7 +479,7 @@ function analyzePost(text, author, engagement) {
 
     // Impossible metrics (−15)
     if (retweets != null && views != null && retweets > views && views > 0) {
-      eaScore -= 15; eaDetails.push('Retweets exceed views — impossible, data anomaly');
+      eaScore -= 15; eaDetails.push('Retweets exceed views, impossible, data anomaly');
     }
 
     // Popularity bonus (0-3)
@@ -487,7 +487,7 @@ function analyzePost(text, author, engagement) {
     else if (likes != null && likes > 1000) { eaScore += 2; eaDetails.push('Good like count (' + fmtNum(likes) + ')'); }
   } else {
     eaScore = 10;
-    eaDetails.push('No engagement data available — cannot assess authenticity');
+    eaDetails.push('No engagement data available, cannot assess authenticity');
   }
 
   eaScore = clamp(eaScore, 0, 30);
@@ -498,11 +498,11 @@ function analyzePost(text, author, engagement) {
   const tsDetails = [];
 
   // CTA impact
-  if (cta.strongCount >= 3) { tsScore -= 12; tsDetails.push(cta.strongCount + ' strong CTAs — aggressive, low trust'); }
-  else if (cta.strongCount === 2) { tsScore -= 8; tsDetails.push('2 strong CTAs — concerning pattern'); }
-  else if (cta.strongCount === 1) { tsScore -= 4; tsDetails.push('1 strong CTA — monitor context'); }
-  else if (cta.softCount > 0) { tsScore -= 1; tsDetails.push(cta.softCount + ' soft CTA(s) — mild promotion'); }
-  else { tsDetails.push('No CTAs — clean'); }
+  if (cta.strongCount >= 3) { tsScore -= 12; tsDetails.push(cta.strongCount + ' strong CTAs, aggressive, low trust'); }
+  else if (cta.strongCount === 2) { tsScore -= 8; tsDetails.push('2 strong CTAs, concerning pattern'); }
+  else if (cta.strongCount === 1) { tsScore -= 4; tsDetails.push('1 strong CTA, monitor context'); }
+  else if (cta.softCount > 0) { tsScore -= 1; tsDetails.push(cta.softCount + ' soft CTA(s), mild promotion'); }
+  else { tsDetails.push('No CTAs, clean'); }
 
   // Low-quality patterns
   const criticalPatterns = lowQualityPatterns.filter(p => p.severity === 'critical');
@@ -523,8 +523,8 @@ function analyzePost(text, author, engagement) {
   }
 
   // Link safety
-  if (rawLinks > 3) { tsScore -= 3; tsDetails.push(rawLinks + ' links — excessive'); }
-  else if (rawLinks === 1) { tsDetails.push('Single link — normal'); }
+  if (rawLinks > 3) { tsScore -= 3; tsDetails.push(rawLinks + ' links, excessive'); }
+  else if (rawLinks === 1) { tsDetails.push('Single link, normal'); }
 
   tsScore = clamp(tsScore, 0, 25);
   categories.push({ name: 'Trust & Safety', score: tsScore, max: 25, weight: '25%', details: tsDetails });
@@ -533,18 +533,18 @@ function analyzePost(text, author, engagement) {
   let spScore = 15; // start clean
   const spDetails = [];
 
-  if (hashtags > 8) { spScore -= 8; spDetails.push(hashtags + ' hashtags — extreme spam'); }
-  else if (hashtags > 4) { spScore -= 4; spDetails.push(hashtags + ' hashtags — excessive'); }
-  else if (hashtags > 0 && hashtags <= 3) { spDetails.push(hashtags + ' hashtag(s) — moderate'); }
+  if (hashtags > 8) { spScore -= 8; spDetails.push(hashtags + ' hashtags, extreme spam'); }
+  else if (hashtags > 4) { spScore -= 4; spDetails.push(hashtags + ' hashtags, excessive'); }
+  else if (hashtags > 0 && hashtags <= 3) { spDetails.push(hashtags + ' hashtag(s), moderate'); }
   else { spDetails.push('No hashtags'); }
 
-  if (emojis > 15) { spScore -= 4; spDetails.push(emojis + ' emojis — spam signal'); }
-  else if (emojis > 10) { spScore -= 2; spDetails.push(emojis + ' emojis — slightly high'); }
+  if (emojis > 15) { spScore -= 4; spDetails.push(emojis + ' emojis, spam signal'); }
+  else if (emojis > 10) { spScore -= 2; spDetails.push(emojis + ' emojis, slightly high'); }
 
   const upperLetters = (text.match(/[A-Z]/g) || []).length;
   const allLetters = (text.match(/[a-zA-Z]/g) || []).length;
   if (allLetters > 10 && upperLetters / allLetters > 0.7) {
-    spScore -= 3; spDetails.push('Excessive uppercase — shouting');
+    spScore -= 3; spDetails.push('Excessive uppercase, shouting');
   }
 
   spScore = clamp(spScore, 0, 15);
@@ -558,11 +558,11 @@ function analyzePost(text, author, engagement) {
   const totalMax = categories.reduce((s, c) => s + c.max, 0);
 
   let label;
-  if (totalScore >= 80) label = 'High quality — genuine, well-crafted content with authentic engagement';
-  else if (totalScore >= 65) label = 'Good quality — mostly authentic with minor concerns';
-  else if (totalScore >= 50) label = 'Average — some positive signals mixed with concerns';
-  else if (totalScore >= 35) label = 'Below average — multiple red flags detected';
-  else label = 'Low quality — likely spam, farming, or inauthentic';
+  if (totalScore >= 80) label = 'High quality, genuine, well-crafted content with authentic engagement';
+  else if (totalScore >= 65) label = 'Good quality, mostly authentic with minor concerns';
+  else if (totalScore >= 50) label = 'Average, some positive signals mixed with concerns';
+  else if (totalScore >= 35) label = 'Below average, multiple red flags detected';
+  else label = 'Low quality, likely spam, farming, or inauthentic';
 
   // ── Bounty Verdict ──
   let verdict, verdictReason;
@@ -575,7 +575,7 @@ function analyzePost(text, author, engagement) {
     if (cta.strongCount > 1) concerns.push(cta.strongCount + ' strong CTAs');
     if (lowQualityPatterns.length > 0) concerns.push(lowQualityPatterns.length + ' pattern flags');
     if (eaScore < 15) concerns.push('engagement concerns');
-    verdictReason = 'Mixed signals detected. ' + (concerns.length > 0 ? 'Review: ' + concerns.join(', ') + '.' : 'Score borderline — human judgment needed.');
+    verdictReason = 'Mixed signals detected. ' + (concerns.length > 0 ? 'Review: ' + concerns.join(', ') + '.' : 'Score borderline, human judgment needed.');
   } else {
     verdict = 'Reject';
     const reasons = [];
@@ -602,7 +602,7 @@ function analyzePost(text, author, engagement) {
   const summaryParts = [];
   if (positives.length > 0) summaryParts.push('Strengths: ' + positives.slice(0, 3).join(', ') + '.');
   if (negatives.length > 0) summaryParts.push('Concerns: ' + negatives.slice(0, 3).join(', ') + '.');
-  summaryParts.push('Overall score ' + totalScore + '/100 — ' + verdict + '.');
+  summaryParts.push('Overall score ' + totalScore + '/100, ' + verdict + '.');
   const executiveSummary = summaryParts.join(' ').slice(0, 300);
 
   // ── Engagement interpretation ──
@@ -653,7 +653,7 @@ function analyzeXora(text, authorHandle, url, resolvedUrls) {
   } else if (/xora/i.test(authorLower) && authorLower !== 'xora_finance') {
     trustScore -= 20;
     flags.push('Author @' + authorLower + ' may impersonate official @xora_finance');
-    trustBreakdown.push({ cat: 'Account', detail: 'Possible impersonator — name contains "xora" but not official', pts: -20 });
+    trustBreakdown.push({ cat: 'Account', detail: 'Possible impersonator, name contains "xora" but not official', pts: -20 });
   } else {
     const mentionsOfficial = /@xora_finance/i.test(text);
     if (mentionsOfficial) {
@@ -686,20 +686,20 @@ function analyzeXora(text, authorHandle, url, resolvedUrls) {
   if (fakeLinks.length > 0) {
     trustScore -= 30;
     flags.push('FAKE XORA domain detected: ' + fakeLinks[0]);
-    trustBreakdown.push({ cat: 'Links', detail: 'Fake/cloned domain — HIGH scam risk', pts: -30 });
+    trustBreakdown.push({ cat: 'Links', detail: 'Fake/cloned domain, HIGH scam risk', pts: -30 });
   }
   if (referralLinks.length > 0) {
     trustScore -= 3;
-    flags.push('Contains referral tracking link — may incentivize promotion');
-    trustBreakdown.push({ cat: 'Links', detail: 'Referral link detected — possible incentivized shilling', pts: -3 });
+    flags.push('Contains referral tracking link, may incentivize promotion');
+    trustBreakdown.push({ cat: 'Links', detail: 'Referral link detected, possible incentivized shilling', pts: -3 });
   }
   if (shortenedLinks.length > 0) {
     trustScore -= 8;
-    flags.push('Uses shortened link — destination cannot be verified');
-    trustBreakdown.push({ cat: 'Links', detail: 'Shortened URL — unverifiable destination', pts: -8 });
+    flags.push('Uses shortened link, destination cannot be verified');
+    trustBreakdown.push({ cat: 'Links', detail: 'Shortened URL, unverifiable destination', pts: -8 });
   }
   if (tcoLinks.length > 0 && officialLinks.length === 0 && fakeLinks.length === 0) {
-    trustBreakdown.push({ cat: 'Links', detail: 't.co wrapped — destination verified via fxtwitter: ' + (resolvedHasXora ? 'xora.finance' : 'unknown'), pts: 0 });
+    trustBreakdown.push({ cat: 'Links', detail: 't.co wrapped, destination verified via fxtwitter: ' + (resolvedHasXora ? 'xora.finance' : 'unknown'), pts: 0 });
   }
   if (allLinks.length === 0) {
     greenFlags.push('No external links');
@@ -711,16 +711,16 @@ function analyzeXora(text, authorHandle, url, resolvedUrls) {
   if (cta.strongCount >= 2) {
     trustScore -= 15;
     flags.push('Aggressive CTAs: ' + cta.detected.filter(c => c.strength === 'strong').map(c => c.label).join(', '));
-    trustBreakdown.push({ cat: 'CTAs', detail: cta.strongCount + ' strong CTAs — aggressive promotion', pts: -15 });
+    trustBreakdown.push({ cat: 'CTAs', detail: cta.strongCount + ' strong CTAs, aggressive promotion', pts: -15 });
   } else if (cta.strongCount === 1) {
     trustScore -= 5;
     trustBreakdown.push({ cat: 'CTAs', detail: '1 strong CTA: ' + cta.detected.find(c => c.strength === 'strong')?.label, pts: -5 });
   } else if (cta.total === 0) {
     trustScore += 5;
-    greenFlags.push('No CTAs — informational post');
+    greenFlags.push('No CTAs, informational post');
     trustBreakdown.push({ cat: 'CTAs', detail: 'No CTAs detected', pts: 5 });
   } else {
-    trustBreakdown.push({ cat: 'CTAs', detail: cta.softCount + ' soft CTA(s) — promotional but not aggressive', pts: 0 });
+    trustBreakdown.push({ cat: 'CTAs', detail: cta.softCount + ' soft CTA(s), promotional but not aggressive', pts: 0 });
   }
 
   // ── 4. APY/yield claims ──
@@ -729,7 +729,7 @@ function analyzeXora(text, authorHandle, url, resolvedUrls) {
     const claimed = parseFloat(apyMatch[1]);
     if (claimed > 25) {
       trustScore -= 15;
-      flags.push('Claims ' + claimed + '% APY — exceeds official 22% maximum');
+      flags.push('Claims ' + claimed + '% APY, exceeds official 22% maximum');
       trustBreakdown.push({ cat: 'APY', detail: claimed + '% exceeds official max (22%)', pts: -15 });
     } else if (claimed <= 22) {
       trustScore += 5;
@@ -758,10 +758,10 @@ function analyzeXora(text, authorHandle, url, resolvedUrls) {
   trustScore = clamp(trustScore, 0, 100);
 
   let trustLabel;
-  if (trustScore >= 80) trustLabel = 'Highly trusted — strong official signals';
-  else if (trustScore >= 65) trustLabel = 'Likely legitimate — mostly verified';
-  else if (trustScore >= 45) trustLabel = 'Mixed signals — verify before acting';
-  else trustLabel = 'Untrusted — multiple risk factors';
+  if (trustScore >= 80) trustLabel = 'Highly trusted, strong official signals';
+  else if (trustScore >= 65) trustLabel = 'Likely legitimate, mostly verified';
+  else if (trustScore >= 45) trustLabel = 'Mixed signals, verify before acting';
+  else trustLabel = 'Untrusted, multiple risk factors';
 
   return {
     isXoraPost: true, trustScore,
@@ -886,30 +886,30 @@ function analyzeReplyQuality(replies, opHandle) {
   // OP engagement
   if (opReplies.length > 0) {
     score += 10; greenFlags.push('OP replied ' + opReplies.length + ' time(s)');
-    breakdown.push({ cat: 'OP Engagement', detail: 'Original author engaged ' + opReplies.length + ' time(s) — active discussion', pts: 10 });
+    breakdown.push({ cat: 'OP Engagement', detail: 'Original author engaged ' + opReplies.length + ' time(s), active discussion', pts: 10 });
   } else {
     score -= 3;
-    breakdown.push({ cat: 'OP Engagement', detail: 'OP did not reply — one-way broadcast', pts: -3 });
+    breakdown.push({ cat: 'OP Engagement', detail: 'OP did not reply, one-way broadcast', pts: -3 });
   }
 
   // Participant diversity
   const ratio = uniqueAuthors.size / Math.max(replies.length, 1);
-  if (ratio > 0.7) { score += 8; greenFlags.push(uniqueAuthors.size + ' unique voices'); breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique authors — real community', pts: 8 }); }
-  else if (ratio > 0.4) { score += 3; breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique — moderate', pts: 3 }); }
-  else { score -= 5; flags.push('Low diversity'); breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique — repetitive', pts: -5 }); }
+  if (ratio > 0.7) { score += 8; greenFlags.push(uniqueAuthors.size + ' unique voices'); breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique authors, real community', pts: 8 }); }
+  else if (ratio > 0.4) { score += 3; breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique, moderate', pts: 3 }); }
+  else { score -= 5; flags.push('Low diversity'); breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique, repetitive', pts: -5 }); }
 
   // Reply depth
   const substantive = realReplies.filter(r => r.text.split(/\s+/).length > 5);
   const subRatio = realReplies.length > 0 ? substantive.length / realReplies.length : 0;
   if (subRatio > 0.7) { score += 10; greenFlags.push(Math.round(subRatio * 100) + '% substantive replies'); breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive (>5 words)', pts: 10 }); }
-  else if (subRatio > 0.4) { score += 3; breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive — mixed', pts: 3 }); }
-  else { score -= 5; breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive — mostly shallow', pts: -5 }); }
+  else if (subRatio > 0.4) { score += 3; breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive, mixed', pts: 3 }); }
+  else { score -= 5; breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive, mostly shallow', pts: -5 }); }
 
   // Bot/spam detection
   const texts = realReplies.map(r => r.text.toLowerCase().trim());
   const uniqueTexts = new Set(texts);
   const dupRatio = realReplies.length > 0 ? 1 - (uniqueTexts.size / realReplies.length) : 0;
-  if (dupRatio > 0.3) { score -= 15; flags.push('Duplicate replies: ' + Math.round(dupRatio * 100) + '%'); breakdown.push({ cat: 'Bot Detection', detail: Math.round(dupRatio * 100) + '% near-identical — bot spam', pts: -15 }); }
+  if (dupRatio > 0.3) { score -= 15; flags.push('Duplicate replies: ' + Math.round(dupRatio * 100) + '%'); breakdown.push({ cat: 'Bot Detection', detail: Math.round(dupRatio * 100) + '% near-identical, bot spam', pts: -15 }); }
 
   let spamCount = 0;
   realReplies.forEach(r => { if (/follow\s+back|like\s+and\s+rt|giveaway|dm\s+for|link\s+in\s+bio/i.test(r.text)) spamCount++; });
@@ -920,11 +920,11 @@ function analyzeReplyQuality(replies, opHandle) {
 
   score = clamp(score, 0, 100);
   let label;
-  if (score >= 80) label = 'Excellent — genuine community discussion';
-  else if (score >= 65) label = 'Good — mostly real conversations';
-  else if (score >= 50) label = 'Average — mixed quality';
-  else if (score >= 35) label = 'Below average — significant noise';
-  else label = 'Poor — likely manipulated';
+  if (score >= 80) label = 'Excellent, genuine community discussion';
+  else if (score >= 65) label = 'Good, mostly real conversations';
+  else if (score >= 50) label = 'Average, mixed quality';
+  else if (score >= 35) label = 'Below average, significant noise';
+  else label = 'Poor, likely manipulated';
 
   return {
     score, label,
