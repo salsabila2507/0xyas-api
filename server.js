@@ -332,10 +332,15 @@ function analyzeFromText(text, author, engagement) {
 }
 
 // ── XORA.FINANCE SPECIFIC ANALYSIS ──────────────────────────
-function analyzeXora(text, authorHandle, url) {
-  // Only runs if post is about XORA
-  const isXoraRelated = /xora|xrp\s*neobank|xora_finance|xora\.finance/i.test(text) ||
-                        /xora\.finance/i.test(url);
+function analyzeXora(text, authorHandle, url, resolvedUrls) {
+  // Check if post is about XORA — text keywords, author handle, or post URL
+  const authorLower = (authorHandle || '').toLowerCase().replace('@', '');
+  const isFromXora = authorLower === 'xora_finance';
+  const textMentionsXora = /xora|xrp\s*neobank|xora_finance|xora\.finance|#xora/i.test(text);
+  const urlHasXora = /xora\.finance|xora_finance/i.test(url) || /xora_finance/i.test(url);
+  // Also check resolved URLs (unwrapped t.co links)
+  const resolvedHasXora = (resolvedUrls || []).some(u => /xora\.finance/i.test(u));
+  const isXoraRelated = isFromXora || textMentionsXora || urlHasXora || resolvedHasXora;
   if (!isXoraRelated) return null;
 
   const officialHandle = 'xora_finance';
@@ -358,18 +363,20 @@ function analyzeXora(text, authorHandle, url) {
 
   // ── 2. Link analysis ──
   const links = text.match(/https?:\/\/[^\s]+/gi) || [];
-  checks.links = links;
-  checks.linkCount = links.length;
+  // Merge resolved URLs for complete picture
+  const allLinks = [...new Set([...links, ...(resolvedUrls || [])])];
+  checks.links = allLinks;
+  checks.linkCount = allLinks.length;
 
-  const hasOfficialLink = links.some(l => /xora\.finance/i.test(l));
-  const hasFakeLink = links.some(l =>
+  const hasOfficialLink = allLinks.some(l => /xora\.finance/i.test(l));
+  const hasFakeLink = allLinks.some(l =>
     /xorafinance\.com/i.test(l) ||
     /xora-?finance\.(com|net|org|xyz|io)/i.test(l) ||
     /xora\.(?!finance)/i.test(l)
   );
-  const hasScamLink = links.some(l =>
-    /bit\.ly|tinyurl|t\.co/i.test(l) && !l.includes('t.co/') // shortened but not X native
-  );
+  // t.co links are Twitter's native shortener — not suspicious by themselves
+  const hasUnknownShortened = allLinks.some(l => /bit\.ly|tinyurl/i.test(l));
+  const hasTcoLinks = links.some(l => /t\.co\//i.test(l));
 
   checks.hasOfficialLink = hasOfficialLink;
   checks.hasFakeLink = hasFakeLink;
@@ -382,12 +389,22 @@ function analyzeXora(text, authorHandle, url) {
     flags.push('Contains FAKE XORA domain — HIGH scam risk');
     trustScore -= 30;
   }
-  if (hasScamLink) {
-    flags.push('Uses shortened/suspicious link — verify destination');
+  if (hasUnknownShortened) {
+    flags.push('Uses shortened link (bit.ly/tinyurl) — verify destination');
     trustScore -= 10;
   }
-  if (links.length === 0) {
+  if (hasTcoLinks && !hasOfficialLink && links.length > 0) {
+    // t.co links are wrapped — can't verify destination from text alone
+    checks.linkWrapped = true;
+  }
+  if (allLinks.length === 0) {
     greenFlags.push('No external links — lower phishing risk');
+  }
+
+  // ── 2b. Official account bonus ──
+  if (isFromXora) {
+    greenFlags.push('Post from official @xora_finance account');
+    trustScore += 20;
   }
 
   // ── 3. CTA (Call to Action) analysis ──
@@ -456,7 +473,6 @@ function analyzeXora(text, authorHandle, url) {
   }
 
   // ── 6. Impersonation check ──
-  const authorLower = (authorHandle || '').toLowerCase().replace('@', '');
   const isImpersonator = /xora/i.test(authorLower) && authorLower !== officialHandle;
   checks.isImpersonator = isImpersonator;
   if (isImpersonator) {
@@ -858,9 +874,35 @@ app.post('/api/analyze', async (req, res) => {
 
     console.log('[3/3] Analysis complete.');
 
-    // Analyze
+    // Extract actual URLs from fxtwitter (resolves t.co wrappers)
+    let resolvedUrls = [];
+    let cardDescription = '';
+    try {
+      const fxFullUrl = 'https://api.fxtwitter.com/' + url.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
+      const fxResp = await fetch(fxFullUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (fxResp.ok) {
+        const fxFull = await fxResp.json();
+        const t = fxFull.tweet;
+        if (t) {
+          // Get actual URLs from card or urls field
+          if (t.card && t.card.url) resolvedUrls.push(t.card.url);
+          if (t.card && t.card.domain) resolvedUrls.push('https://' + t.card.domain);
+          if (t.card && t.card.description) cardDescription = t.card.description;
+          if (t.urls && Array.isArray(t.urls)) {
+            t.urls.forEach(u => { if (u.url) resolvedUrls.push(u.url); });
+          }
+          if (t.text) {
+            const textUrls = t.text.match(/https?:\/\/[^\s]+/gi) || [];
+            textUrls.forEach(u => resolvedUrls.push(u));
+          }
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    // Analyze — append card description for better XORA detection
     const auth = analyzeFromText(postInfo.text, postInfo.author, engagement);
-    const xora = analyzeXora(postInfo.text, postInfo.authorHandle, url);
+    const textForXora = postInfo.text + (cardDescription ? ' ' + cardDescription : '');
+    const xora = analyzeXora(textForXora, postInfo.authorHandle, url, resolvedUrls);
 
     res.json({
       ok: true,
