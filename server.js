@@ -2,6 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 
+// Secrets live in .env (gitignored), never in the client bundle.
+// Missing file is fine — the process env may already carry them.
+try { process.loadEnvFile(path.join(__dirname, '.env')); } catch (_) {}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -1038,6 +1042,56 @@ app.post('/api/replies', async (req, res) => {
   } catch (err) {
     console.error('[replies] Error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// LLM PROXY
+// The API key stays server-side. The prompt is built here too, so this
+// endpoint can't be used as an open relay to Gemini.
+// ══════════════════════════════════════════════════════════════
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
+function buildAnalysisPrompt(text, author) {
+  return 'Analyze this X/Twitter post for authenticity. Respond ONLY with valid JSON, no markdown.\n' +
+    'Post by: ' + author + '\nContent: """' + text + '"""\n\n' +
+    'JSON schema:\n' +
+    '{"tone":"one word","clickbait_score":0-100,"clickbait_explanation":"string",' +
+    '"sentiment":"positive|negative|neutral|mixed","sentiment_detail":"one sentence",' +
+    '"reply_quality":{"assessment":"genuine|mixed|likely_fake","explanation":"string"},' +
+    '"red_flags":["string"],"green_flags":["string"],' +
+    '"summary":"2-3 sentence natural language summary"}';
+}
+
+app.post('/api/llm', async (req, res) => {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return res.status(503).json({ error: 'LLM not configured on this server' });
+
+  const text = String((req.body && req.body.text) || '').slice(0, 4000);
+  const author = String((req.body && req.body.author) || 'unknown').slice(0, 100);
+  if (!text.trim()) return res.status(400).json({ error: 'Missing post text' });
+
+  try {
+    const r = await fetch(GEMINI_BASE + '/models/' + GEMINI_MODEL + ':generateContent?key=' + key, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: buildAnalysisPrompt(text, author) }] }],
+        // 2.5-flash spends "thinking" tokens from the same budget; 800 was
+        // truncating the JSON mid-string
+        generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
+      })
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error.message);
+    const raw = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const parsed = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim());
+    res.json({ ok: true, analysis: parsed });
+  } catch (err) {
+    console.error('[llm] Error:', err.message);
+    res.status(502).json({ error: err.message });
   }
 });
 
