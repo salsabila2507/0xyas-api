@@ -319,7 +319,7 @@ function extractUser(u){var m=u.match(/(?:x\.com|twitter\.com)\/(\w+)\/status/);
 // ── GEMINI ────────────────────────────────────────────────
 function callGemini(text,author){
   var p='Analyze this X/Twitter post for authenticity. Respond ONLY with valid JSON, no markdown.\n'+
-    'Post by: '+author+'\nContent: """'+text+"""\n\n"+
+    'Post by: '+author+'\nContent: """'+text+'"""\n\n"'+
     'JSON schema:\n'+
     '{"tone":"one word","clickbait_score":0-100,"clickbait_explanation":"string",'+
     '"sentiment":"positive|negative|neutral|mixed","sentiment_detail":"one sentence",'+
