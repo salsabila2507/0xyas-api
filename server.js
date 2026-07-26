@@ -5,544 +5,788 @@ const path = require('path');
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// Serve frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = 3100;
 
-// ── Extract tweet ID from URL ─────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// DATA FETCHING
+// ══════════════════════════════════════════════════════════════
+
 function extractTweetId(url) {
   const m = url.match(/status\/(\d+)/);
   return m ? m[1] : null;
 }
 
-// ── Oembed fetch ─────────────────────────────────────────────
 async function fetchOembed(tweetUrl) {
-  const endpoint = 'https://publish.x.com/oembed?url=' + encodeURIComponent(tweetUrl);
-  const resp = await fetch(endpoint, {
+  const resp = await fetch('https://publish.x.com/oembed?url=' + encodeURIComponent(tweetUrl), {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; 0XYAS-Analyzer/1.0)' }
   });
   if (!resp.ok) throw new Error('Oembed returned ' + resp.status);
   return resp.json();
 }
 
-// ── Syndication API fetch (engagement metrics) ──────────────
 async function fetchSyndication(tweetId) {
   try {
     const resp = await fetch('https://cdn.syndication.twimg.com/tweet-result?id=' + tweetId + '&lang=en', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://publish.x.com/'
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://publish.x.com/' }
     });
     if (!resp.ok) return null;
     const data = await resp.json();
-    if (!data || Object.keys(data).length === 0) return null;
-    return data;
-  } catch (e) {
-    console.log('Syndication fetch failed:', e.message);
-    return null;
-  }
+    return (data && Object.keys(data).length > 0) ? data : null;
+  } catch (e) { return null; }
 }
 
-// ── fxtwitter API fetch (engagement metrics) ─────────────────
 async function fetchFxTwitter(tweetUrl) {
   try {
     const fxUrl = 'https://api.fxtwitter.com/' + tweetUrl.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
-    const resp = await fetch(fxUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    });
+    const resp = await fetch(fxUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (!resp.ok) return null;
-    const data = await resp.json();
-    const t = data.tweet;
+    const t = (await resp.json()).tweet;
     if (!t) return null;
     return {
-      likes: t.likes ?? t.favorite_count ?? null,
-      retweets: t.retweets ?? t.retweet_count ?? null,
-      replies: t.replies ?? t.reply_count ?? null,
-      views: t.views ?? null,
-      quotes: t.quotes ?? t.quote_count ?? null
+      likes: t.likes ?? null, retweets: t.retweets ?? null,
+      replies: t.replies ?? null, views: t.views ?? null, quotes: t.quotes ?? null
     };
-  } catch (e) {
-    console.log('fxtwitter fetch failed:', e.message);
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// ── Parse oembed HTML ────────────────────────────────────────
+async function fetchFxTwitterFull(tweetUrl) {
+  try {
+    const fxUrl = 'https://api.fxtwitter.com/' + tweetUrl.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
+    const resp = await fetch(fxUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!resp.ok) return null;
+    return (await resp.json()).tweet || null;
+  } catch (e) { return null; }
+}
+
 function parseOembedHtml(html) {
   const authorMatch = html.match(/class="[^"]*u-url[^"]*"[^>]*>([^<]+)<\/a>/);
-  const displayName = authorMatch ? authorMatch[1].trim() : null;
-
   const handleMatch = html.match(/@(\w+)/);
-  const handle = handleMatch ? '@' + handleMatch[1] : null;
-
   const textMatch = html.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+  const dateMatch = html.match(/>([\w]+ \d+, \d{4})</);
   let text = '';
   if (textMatch) {
-    text = textMatch[1]
-      .replace(/<br\s*\/?>/gi, '\n')
+    text = textMatch[1].replace(/<br\s*\/?>/gi, '\n')
       .replace(/<a[^>]*href="([^"]*)"[^>]*>[^<]*<\/a>/gi, '$1')
-      .replace(/<[^>]*>/g, '')
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .trim();
+      .replace(/<[^>]*>/g, '').replace(/&#39;/g, "'").replace(/&amp;/g, '&').trim();
   }
-
-  const dateMatch = html.match(/>([\w]+ \d+, \d{4})</);
-  const date = dateMatch ? dateMatch[1] : null;
-
-  return { displayName, handle, text, date };
+  return {
+    displayName: authorMatch ? authorMatch[1].trim() : null,
+    handle: handleMatch ? '@' + handleMatch[1] : null,
+    text, date: dateMatch ? dateMatch[1] : null
+  };
 }
 
-// ── Helpers ──────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════
+
 function fmtNum(n) {
-  if (n === null || n === undefined) return 'N/A';
+  if (n == null) return 'N/A';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
   return String(n);
 }
 
-function detectSentiment(text) {
-  const positive = /love|great|amazing|awesome|best|good|happy|excited|beautiful|perfect|incredible|insane|bullish|moon|gem/i;
-  const negative = /hate|bad|worst|terrible|awful|ugly|boring|scam|fake|trash|bearish|rekt|dump|rug/i;
-  const pos = (text.match(positive) || []).length;
-  const neg = (text.match(negative) || []).length;
-  if (pos > neg + 2) return 'very_positive';
-  if (pos > neg) return 'positive';
-  if (neg > pos + 2) return 'very_negative';
-  if (neg > pos) return 'negative';
-  return 'neutral';
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// ══════════════════════════════════════════════════════════════
+// VISIBLE TEXT EXTRACTION — strip URLs, t.co, media, quotes
+// ══════════════════════════════════════════════════════════════
+
+function extractVisibleText(text) {
+  return text
+    .replace(/https?:\/\/t\.co\/\w+/g, '')           // t.co links
+    .replace(/https?:\/\/[^\s]+/g, '')                // all URLs
+    .replace(/@\w+/g, '')                             // @mentions
+    .replace(/\n{3,}/g, '\n\n')                       // excess newlines
+    .trim();
 }
 
-// ── Authenticity analyzer (honest, varied scoring) ───────────
-function analyzeFromText(text, author, engagement) {
-  const breakdown = [];
-  let score = 50; // start neutral — earn or lose points
+function countVisibleWords(text) {
+  const visible = extractVisibleText(text);
+  return visible.split(/\s+/).filter(w => w.length > 0).length;
+}
 
-  // ────────── 1. CONTENT DEPTH ──
-  const words = text.split(/\s+/).filter(w => w.length > 0);
-  const wc = words.length;
-  const tl = text.length;
+function countVisibleChars(text) {
+  return extractVisibleText(text).length;
+}
 
-  if (wc <= 3) {
-    score -= 15;
-    breakdown.push({ cat: 'Content Depth', detail: 'Extremely short post (' + wc + ' words) — adds no value', pts: -15 });
-  } else if (wc <= 8) {
-    score -= 8;
-    breakdown.push({ cat: 'Content Depth', detail: 'Very short post (' + wc + ' words) — minimal substance', pts: -8 });
-  } else if (wc <= 15) {
-    score -= 2;
-    breakdown.push({ cat: 'Content Depth', detail: 'Short post (' + wc + ' words) — limited depth', pts: -2 });
-  } else if (wc >= 40) {
-    score += 12;
-    breakdown.push({ cat: 'Content Depth', detail: 'Long-form substantive content (' + wc + ' words)', pts: 12 });
-  } else if (wc >= 25) {
-    score += 7;
-    breakdown.push({ cat: 'Content Depth', detail: 'Good length content (' + wc + ' words)', pts: 7 });
+// ══════════════════════════════════════════════════════════════
+// CTA CLASSIFICATION — None / Soft / Strong with explanation
+// ══════════════════════════════════════════════════════════════
+
+function classifyCtas(text) {
+  const patterns = [
+    { re: /follow\s+back/i, strength: 'strong', label: 'Follow-back request', explanation: 'Asks for follows in exchange — direct engagement farming' },
+    { re: /like\s+and\s+(rt|retweet)|rt\s*&?\s*like|retweet.*follow/i, strength: 'strong', label: 'Like+RT combo', explanation: 'Demands multiple engagement actions — aggressive farming' },
+    { re: /follow.*like.*comment|like.*comment.*follow/i, strength: 'strong', label: 'Triple engagement bait', explanation: 'Requests follow+like+comment — maximum farming attempt' },
+    { re: /giveaway/i, strength: 'strong', label: 'Giveaway', explanation: 'Giveaway content — typically used to farm engagement' },
+    { re: /airdrop.*follow|follow.*airdrop/i, strength: 'strong', label: 'Airdrop+follow', explanation: 'Airdrop promise tied to follows — common scam/bot pattern' },
+    { re: /dm\s+(me|for)|message\s+me/i, strength: 'strong', label: 'DM solicitation', explanation: 'Directs users to DM — common in scam funnels' },
+    { re: /whitelist|wl\s+spot|guaranteed\s+spot/i, strength: 'strong', label: 'Whitelist/spot promise', explanation: 'Promises guaranteed access — engagement bait' },
+    { re: /click\s*(the\s*)?link|link\s+in\s+(bio|thread|comments)/i, strength: 'strong', label: 'Link redirect', explanation: 'Directs to external link — potential phishing or redirect scam' },
+    { re: /limited\s+time|act\s+now|last\s+chance|ending\s+soon|hurry/i, strength: 'strong', label: 'Urgency language', explanation: 'Creates artificial urgency — manipulation tactic' },
+    { re: /guaranteed|100%\s+profit|risk[- ]free|no\s+loss/i, strength: 'strong', label: 'Unrealistic claims', explanation: 'Promises guaranteed returns — classic scam indicator' },
+    { re: /claim\s+now|claim\s+your|claim\s+this/i, strength: 'strong', label: 'Claim CTA', explanation: 'Urges immediate claiming — phishing or scam signal' },
+    { re: /sign\s+up|register|join\s+now|open\s*(your)?\s*account/i, strength: 'soft', label: 'Sign-up prompt', explanation: 'Invites registration — promotional but not necessarily malicious' },
+    { re: /deposit|send\s+xrp|transfer/i, strength: 'soft', label: 'Deposit/transfer prompt', explanation: 'Moves funds — legitimate in product context but watch for urgency' },
+    { re: /check\s+out|look\s+at|see\s+this/i, strength: 'soft', label: 'Soft promotion', explanation: 'Casual recommendation — low-intensity CTA' },
+    { re: /subscribe|join\s+my|follow\s+me/i, strength: 'soft', label: 'Self-promotion', explanation: 'Asks for follows/subscribes — common but mild farming' },
+    { re: /what\s+do\s+you\s+think|thoughts\?|agree\?/i, strength: 'none', label: 'Discussion prompt', explanation: 'Genuine engagement question — not a farming CTA' },
+  ];
+
+  const detected = [];
+  patterns.forEach(p => {
+    if (p.re.test(text)) {
+      detected.push({ label: p.label, strength: p.strength, explanation: p.explanation });
+    }
+  });
+
+  const strongCount = detected.filter(c => c.strength === 'strong').length;
+  const softCount = detected.filter(c => c.strength === 'soft').length;
+  let overall = 'none';
+  if (strongCount > 0) overall = 'strong';
+  else if (softCount > 0) overall = 'soft';
+
+  return { detected, overall, strongCount, softCount, total: detected.length };
+}
+
+// ══════════════════════════════════════════════════════════════
+// CONTENT QUALITY EVALUATION
+// ══════════════════════════════════════════════════════════════
+
+function evaluateContentQuality(text, visibleWords) {
+  const checks = [];
+
+  // Originality — is it original or just a RT/quote?
+  const isRetweet = /^(RT|QT|cc)\s*[:@]/i.test(text) || /retweeted/i.test(text);
+  if (isRetweet) {
+    checks.push({ cat: 'Originality', score: 0, max: 10, detail: 'Appears to be a retweet/quote — not original content' });
+  } else if (visibleWords > 15) {
+    checks.push({ cat: 'Originality', score: 8, max: 10, detail: 'Original substantive content (' + visibleWords + ' visible words)' });
+  } else if (visibleWords > 8) {
+    checks.push({ cat: 'Originality', score: 5, max: 10, detail: 'Short original content (' + visibleWords + ' words)' });
   } else {
-    score += 2;
-    breakdown.push({ cat: 'Content Depth', detail: 'Moderate length (' + wc + ' words)', pts: 2 });
+    checks.push({ cat: 'Originality', score: 2, max: 10, detail: 'Very short — limited originality signal' });
   }
 
-  // ────────── 2. ORIGINALITY ──
-  if (/^(RT|QT|cc)\s*[:@]/i.test(text) || /retweeted/i.test(text)) {
-    score -= 8;
-    breakdown.push({ cat: 'Originality', detail: 'Appears to be a retweet/quote — not original content', pts: -8 });
-  } else if (wc > 10 && !/follow|like|rt|retweet|giveaway|airdrop/i.test(text)) {
-    score += 5;
-    breakdown.push({ cat: 'Originality', detail: 'Original content, no engagement farming language', pts: 5 });
+  // Clarity — sentence structure, punctuation
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 3);
+  const avgSentenceLen = sentences.length > 0 ? visibleWords / sentences.length : 0;
+  const hasQuestion = /\?/.test(text);
+  const hasExclamation = /!/.test(text);
+  if (sentences.length >= 3 && avgSentenceLen > 5 && avgSentenceLen < 30) {
+    checks.push({ cat: 'Clarity', score: 8, max: 10, detail: 'Well-structured with ' + sentences.length + ' clear sentences' });
+  } else if (sentences.length >= 1) {
+    checks.push({ cat: 'Clarity', score: 5, max: 10, detail: sentences.length + ' sentence(s), moderate structure' });
   } else {
-    breakdown.push({ cat: 'Originality', detail: 'Cannot determine originality', pts: 0 });
+    checks.push({ cat: 'Clarity', score: 3, max: 10, detail: 'No clear sentence structure' });
   }
 
-  // ────────── 3. RED FLAGS (text patterns) ──
-  let redFlagPts = 0;
-  const redFlagDetails = [];
-  if (/follow\s+back/i.test(text)) { redFlagPts -= 8; redFlagDetails.push('"follow back" — engagement bait'); }
-  if (/like\s+and\s+rt/i.test(text) || /retweet/i.test(text)) { redFlagPts -= 5; redFlagDetails.push('retweet request — farming'); }
-  if (/giveaway/i.test(text)) { redFlagPts -= 5; redFlagDetails.push('giveaway — farming signal'); }
-  if (/airdrop/i.test(text) && /follow/i.test(text)) { redFlagPts -= 8; redFlagDetails.push('airdrop + follow combo — bot pattern'); }
-  if (/dm\s+for/i.test(text)) { redFlagPts -= 3; redFlagDetails.push('DM solicitation — potential scam'); }
-  if (/click\s+here|link\s+in\s+bio/i.test(text)) { redFlagPts -= 3; redFlagDetails.push('link redirect language — suspicious'); }
-  if (/limited\s+time|act\s+now|last\s+chance/i.test(text)) { redFlagPts -= 4; redFlagDetails.push('urgency language — manipulation'); }
-  if (/guaranteed|100%\s+profit|risk[- ]free/i.test(text)) { redFlagPts -= 6; redFlagDetails.push('unrealistic claims — scam signal'); }
-  if (/whitelist|wl\b/i.test(text)) { redFlagPts -= 2; redFlagDetails.push('whitelist mention — bait'); }
-  score += redFlagPts;
-  if (redFlagDetails.length > 0) {
-    breakdown.push({ cat: 'Red Flags', detail: redFlagDetails.join('; '), pts: redFlagPts });
+  // Educational value — does it explain something?
+  const educationalSignals = /because|since|therefore|however|for example|in other words|means that|this is|the reason|explains|how to|step|guide|tip|learn|understand|important|key|note that/i;
+  const hasEducational = educationalSignals.test(text);
+  if (hasEducational && visibleWords > 20) {
+    checks.push({ cat: 'Educational Value', score: 9, max: 10, detail: 'Contains explanatory language — informative content' });
+  } else if (hasEducational) {
+    checks.push({ cat: 'Educational Value', score: 6, max: 10, detail: 'Some educational signals but brief' });
+  } else if (visibleWords > 30) {
+    checks.push({ cat: 'Educational Value', score: 5, max: 10, detail: 'Long-form but no clear educational structure' });
+  } else {
+    checks.push({ cat: 'Educational Value', score: 2, max: 10, detail: 'No educational signals detected' });
   }
 
-  // ────────── 4. SPAM SIGNALS ──
+  // Readability — word complexity
+  const words = extractVisibleText(text).split(/\s+/).filter(w => w.length > 0);
+  const avgWordLen = words.length > 0 ? words.reduce((s, w) => s + w.length, 0) / words.length : 0;
+  const longWords = words.filter(w => w.length > 8).length;
+  const longWordRatio = words.length > 0 ? longWords / words.length : 0;
+  if (avgWordLen > 3 && avgWordLen < 7 && longWordRatio < 0.3) {
+    checks.push({ cat: 'Readability', score: 8, max: 10, detail: 'Clear, accessible language (avg ' + avgWordLen.toFixed(1) + ' chars/word)' });
+  } else if (avgWordLen <= 7) {
+    checks.push({ cat: 'Readability', score: 5, max: 10, detail: 'Moderate readability (avg ' + avgWordLen.toFixed(1) + ' chars/word)' });
+  } else {
+    checks.push({ cat: 'Readability', score: 3, max: 10, detail: 'Complex language (avg ' + avgWordLen.toFixed(1) + ' chars/word)' });
+  }
+
+  // Structure — does it have formatting?
+  const hasList = /[-•▪]\s|^\d+[.)]\s/m.test(text);
+  const hasNewlines = /\n/.test(text);
+  const hasEmoji = /[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}]/u.test(text);
+  const structureScore = (hasList ? 3 : 0) + (hasNewlines ? 3 : 0) + (hasEmoji ? 2 : 0) + (sentences.length >= 2 ? 2 : 0);
+  checks.push({ cat: 'Structure', score: Math.min(10, structureScore + 2), max: 10, detail: 'Formatting: ' + (hasList ? 'lists ' : '') + (hasNewlines ? 'paragraphs ' : '') + (hasEmoji ? 'emoji ' : '') || 'plain text' });
+
+  return checks;
+}
+
+// ══════════════════════════════════════════════════════════════
+// LOW-QUALITY PATTERN DETECTION
+// ══════════════════════════════════════════════════════════════
+
+function detectLowQualityPatterns(text, ctaResult) {
+  const flags = [];
+
+  // Engagement farming
+  if (ctaResult.strongCount >= 2) {
+    flags.push({ pattern: 'Multi-CTA farming', severity: 'high', detail: ctaResult.strongCount + ' strong CTAs detected — aggressive engagement farming' });
+  } else if (ctaResult.strongCount === 1) {
+    flags.push({ pattern: 'Single strong CTA', severity: 'medium', detail: 'One strong CTA present: ' + ctaResult.detected.find(c => c.strength === 'strong')?.label });
+  }
+
+  // Keyword stuffing
+  const hashtags = (text.match(/#/g) || []).length;
+  if (hashtags > 8) {
+    flags.push({ pattern: 'Hashtag stuffing', severity: 'high', detail: hashtags + ' hashtags — extreme keyword stuffing' });
+  } else if (hashtags > 4) {
+    flags.push({ pattern: 'Excessive hashtags', severity: 'medium', detail: hashtags + ' hashtags — above normal usage' });
+  }
+
+  // Emoji spam
+  const emojis = (text.match(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu) || []).length;
+  if (emojis > 15) {
+    flags.push({ pattern: 'Emoji spam', severity: 'medium', detail: emojis + ' emojis — excessive, low-quality signal' });
+  }
+
+  // Shouting (excessive uppercase)
+  const letters = (text.match(/[a-zA-Z]/g) || []).length;
+  const uppers = (text.match(/[A-Z]/g) || []).length;
+  if (letters > 10 && uppers / letters > 0.7) {
+    flags.push({ pattern: 'Excessive uppercase', severity: 'medium', detail: Math.round(uppers / letters * 100) + '% uppercase — aggressive tone' });
+  }
+
+  // Repetitive template patterns
+  const lowerText = text.toLowerCase();
+  const templatePatterns = [
+    /(?:who|what|when|where|why)\s+(?:else|is|are|has|can|will)/i,
+    /(?:did you know|fun fact|pro tip|life hack)/i,
+    /(?:tag|mention|share with)\s+(?:a friend|someone)/i,
+  ];
+  let templateCount = 0;
+  templatePatterns.forEach(p => { if (p.test(text)) templateCount++; });
+  if (templateCount > 0) {
+    flags.push({ pattern: 'Template language', severity: 'low', detail: 'Uses formulaic content patterns' });
+  }
+
+  // Scam/fraud indicators
+  const scamPatterns = [
+    { re: /guaranteed\s+profit|risk[- ]free|100%\s+(?:safe|profit|return)/i, label: 'Guaranteed returns claim' },
+    { re: /send\s+\$?\d+.*get\s+\$?\d+/i, label: 'Send-to-receive scam pattern' },
+    { re: /seed\s+phrase|private\s+key|mnemonic/i, label: 'Seed phrase fishing' },
+    { re: /double\s+(?:your|my)\s+(?:money|xrp|crypto|eth)/i, label: 'Double-your-money scam' },
+    { re: /kyc\s+bypass|no\s+kyc/i, label: 'KYC bypass claim' },
+  ];
+  scamPatterns.forEach(sp => {
+    if (sp.re.test(text)) {
+      flags.push({ pattern: 'Scam indicator', severity: 'critical', detail: sp.label + ' — classic fraud pattern' });
+    }
+  });
+
+  // Suspicious posting behavior signals
+  const links = (text.match(/https?:\/\/[^\s]+/gi) || []).length;
+  if (links > 3) {
+    flags.push({ pattern: 'Link spam', severity: 'medium', detail: links + ' links in one post — excessive' });
+  }
+
+  const urgentWords = (lowerText.match(/limited time|act now|last chance|hurry|ending soon|don't miss/i) || []).length;
+  if (urgentWords >= 2) {
+    flags.push({ pattern: 'Urgency stacking', severity: 'high', detail: urgentWords + ' urgency phrases — pressure tactic' });
+  }
+
+  return flags;
+}
+
+// ══════════════════════════════════════════════════════════════
+// ENGAGEMENT INTERPRETATION — explain what ratios mean
+// ══════════════════════════════════════════════════════════════
+
+function interpretEngagement(eng) {
+  if (!eng) return null;
+  const { likes, retweets, replies, views, quotes } = eng;
+  const interp = [];
+
+  if (views != null && likes != null && views > 100) {
+    const engRate = ((likes + (replies || 0) + (retweets || 0)) / views * 100);
+    let meaning;
+    if (engRate > 25) meaning = 'Unusually high — likely amplified by bots or coordinated accounts';
+    else if (engRate > 8) meaning = 'Strong organic engagement — audience actively interacting';
+    else if (engRate > 3) meaning = 'Decent engagement — normal for established accounts';
+    else if (engRate > 1) meaning = 'Below average — passive audience or low reach';
+    else if (engRate > 0.1) meaning = 'Very low engagement relative to views — may indicate botted views';
+    else meaning = 'Near-zero engagement — possible ghost traffic';
+    interp.push({ metric: 'Engagement Rate', value: engRate.toFixed(2) + '%', meaning });
+  }
+
+  if (replies != null && likes != null && likes > 0) {
+    const ratio = replies / likes;
+    let meaning;
+    if (ratio > 5) meaning = 'Extreme — replies vastly exceed likes, suggesting spam replies or heated controversy';
+    else if (ratio > 3) meaning = 'Very high — likely spam replies or polarizing content generating heated debate';
+    else if (ratio > 1.5) meaning = 'Above average — active discussion, could be genuine debate or mild spam';
+    else if (ratio > 0.3) meaning = 'Healthy — real conversations happening alongside likes';
+    else if (ratio > 0.05) meaning = 'Low — audience prefers liking over discussing';
+    else meaning = 'Very low — passive audience, content consumed but not discussed';
+    interp.push({ metric: 'Reply/Like Ratio', value: ratio.toFixed(2) + 'x', meaning });
+  }
+
+  if (retweets != null && likes != null && likes > 0) {
+    const ratio = retweets / likes;
+    let meaning;
+    if (ratio > 5) meaning = 'Abnormal — retweets massively exceed likes, strong farming signal';
+    else if (ratio > 2) meaning = 'High — content is shared more than appreciated, possible forced virality';
+    else if (ratio > 0.5) meaning = 'Balanced — normal sharing pattern';
+    else if (ratio > 0.1) meaning = 'Like-heavy — content appreciated but not widely shared';
+    else meaning = 'Minimal sharing — consumed but not redistributed';
+    interp.push({ metric: 'RT/Like Ratio', value: ratio.toFixed(2) + 'x', meaning });
+  }
+
+  if (quotes != null && replies != null && quotes > 0 && replies > 0) {
+    const ratio = quotes / replies;
+    let meaning;
+    if (ratio > 3) meaning = 'Content is quoted far more than replied to — likely controversial or viral-bait';
+    else if (ratio > 1) meaning = 'Active quote engagement — sparking broader conversation';
+    else meaning = 'Replies dominate — direct conversation preferred over quoting';
+    interp.push({ metric: 'Quote/Reply Ratio', value: ratio.toFixed(2) + 'x', meaning });
+  }
+
+  if (views != null && likes != null && views > 10000 && likes < 5) {
+    interp.push({ metric: 'Ghost Traffic', value: fmtNum(views) + ' views / ' + (likes || 0) + ' likes', meaning: 'High views with near-zero likes — almost certainly botted views' });
+  }
+
+  return interp;
+}
+
+// ══════════════════════════════════════════════════════════════
+// MAIN ANALYSIS ENGINE — transparent weighted scoring
+// ══════════════════════════════════════════════════════════════
+
+function analyzePost(text, author, engagement) {
+  // ── Extract visible text (strip URLs, mentions, t.co) ──
+  const visibleText = extractVisibleText(text);
+  const visibleWords = countVisibleWords(text);
+  const visibleChars = countVisibleChars(text);
+
+  // ── Counts from raw text ──
   const hashtags = (text.match(/#/g) || []).length;
   const emojis = (text.match(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu) || []).length;
-  const links = text.match(/https?:\/\/[^\s]+/gi) || [];
-  const upperChars = (text.match(/[A-Z]/g) || []).length;
-  const letterChars = (text.match(/[a-zA-Z]/g) || []).length;
-  const upperRatio = letterChars > 10 ? upperChars / letterChars : 0;
+  const rawLinks = (text.match(/https?:\/\/[^\s]+/gi) || []).length;
+  const mentions = (text.match(/@\w+/g) || []).length;
 
-  let spamPts = 0;
-  const spamDetails = [];
-  if (hashtags > 10) { spamPts -= 10; spamDetails.push('extreme hashtag spam (' + hashtags + ')'); }
-  else if (hashtags > 5) { spamPts -= 5; spamDetails.push('excessive hashtags (' + hashtags + ')'); }
-  else if (hashtags > 0 && hashtags <= 3) { spamPts += 2; }
-  if (emojis > 15) { spamPts -= 5; spamDetails.push('extreme emoji spam (' + emojis + ')'); }
-  else if (emojis > 10) { spamPts -= 3; spamDetails.push('excessive emojis (' + emojis + ')'); }
-  if (links.length > 3) { spamPts -= 5; spamDetails.push('multiple links (' + links.length + ')'); }
-  if (upperRatio > 0.7 && letterChars > 10) { spamPts -= 5; spamDetails.push('excessive uppercase (' + Math.round(upperRatio * 100) + '%)'); }
-  score += spamPts;
-  if (spamDetails.length > 0) {
-    breakdown.push({ cat: 'Spam Signals', detail: spamDetails.join('; '), pts: spamPts });
-  }
+  // ── CTA classification ──
+  const cta = classifyCtas(text);
 
-  // ────────── 5. ENGAGEMENT QUALITY ──
+  // ── Content quality evaluation ──
+  const contentQuality = evaluateContentQuality(text, visibleWords);
+  const qualityScore = contentQuality.reduce((s, c) => s + c.score, 0);
+  const qualityMax = contentQuality.reduce((s, c) => s + c.max, 0);
+
+  // ── Low-quality pattern detection ──
+  const lowQualityPatterns = detectLowQualityPatterns(text, cta);
+
+  // ── Sentiment ──
+  const posWords = (visibleText.match(/love|great|amazing|awesome|best|good|happy|excited|beautiful|perfect|incredible|bullish|gem|solid|strong|powerful|innovative|breakthrough|impressive/i) || []).length;
+  const negWords = (visibleText.match(/hate|bad|worst|terrible|awful|scam|fake|trash|bearish|rekt|dump|rug|disappointing|broken|fraud|stolen|hack/i) || []).length;
+  let sentiment = 'neutral';
+  if (posWords > negWords + 1) sentiment = posWords > negWords + 3 ? 'very_positive' : 'positive';
+  else if (negWords > posWords + 1) sentiment = negWords > posWords + 3 ? 'very_negative' : 'negative';
+
+  // ════════════════════════════════════════════════════════════
+  // WEIGHTED SCORING MODEL
+  // Categories: Content Quality (30), Engagement (30), Trust (25), Spam (15)
+  // ════════════════════════════════════════════════════════════
+
+  const categories = [];
+
+  // ── CATEGORY 1: Content Quality (max 30) ──
+  let cqScore = 0;
+  const cqDetails = [];
+
+  // Word count contribution (0-10)
+  if (visibleWords <= 3) { cqScore += 0; cqDetails.push('Extremely short (' + visibleWords + ' words) — no substance'); }
+  else if (visibleWords <= 8) { cqScore += 2; cqDetails.push('Very short (' + visibleWords + ' words) — minimal content'); }
+  else if (visibleWords <= 15) { cqScore += 4; cqDetails.push('Short post (' + visibleWords + ' words)'); }
+  else if (visibleWords <= 30) { cqScore += 7; cqDetails.push('Moderate content (' + visibleWords + ' words)'); }
+  else { cqScore += 10; cqDetails.push('Substantial content (' + visibleWords + ' words)'); }
+
+  // Quality evaluation (0-12, from quality checks averaged)
+  const qAvg = qualityMax > 0 ? (qualityScore / qualityMax) * 12 : 0;
+  cqScore += Math.round(qAvg);
+  const topQuality = contentQuality.filter(c => c.score >= 7).map(c => c.cat);
+  const weakQuality = contentQuality.filter(c => c.score <= 3).map(c => c.cat);
+  if (topQuality.length > 0) cqDetails.push('Strong: ' + topQuality.join(', '));
+  if (weakQuality.length > 0) cqDetails.push('Weak: ' + weakQuality.join(', '));
+
+  // Originality bonus (0-5)
+  const isRetweet = /^(RT|QT|cc)\s*[:@]/i.test(text);
+  if (isRetweet) { cqScore += 0; cqDetails.push('Retweet/quote — not original'); }
+  else if (visibleWords > 15 && !/follow|like|rt|retweet|giveaway/i.test(visibleText)) { cqScore += 5; cqDetails.push('Original content'); }
+  else if (visibleWords > 8) { cqScore += 3; cqDetails.push('Likely original'); }
+  else { cqScore += 1; cqDetails.push('Too short to assess originality'); }
+
+  // Educational value bonus (0-3)
+  const eduCheck = contentQuality.find(c => c.cat === 'Educational Value');
+  if (eduCheck && eduCheck.score >= 7) { cqScore += 3; cqDetails.push('Informative/educational'); }
+  else if (eduCheck && eduCheck.score >= 5) { cqScore += 1; cqDetails.push('Somewhat informative'); }
+
+  cqScore = clamp(cqScore, 0, 30);
+  categories.push({ name: 'Content Quality', score: cqScore, max: 30, weight: '30%', details: cqDetails });
+
+  // ── CATEGORY 2: Engagement Authenticity (max 30) ──
+  let eaScore = 15; // neutral start
+  const eaDetails = [];
+
   if (engagement) {
     const { likes, retweets, replies, views, quotes } = engagement;
 
-    // 5a. Engagement rate (real people interacting vs passive views)
-    if (views !== null && likes !== null && views > 100) {
+    // Engagement rate (−8 to +8)
+    if (views != null && likes != null && views > 100) {
       const engRate = ((likes + (replies || 0) + (retweets || 0)) / views * 100);
-      if (engRate > 25) {
-        score -= 10;
-        breakdown.push({ cat: 'Engagement Rate', detail: 'Abnormally high (' + engRate.toFixed(1) + '%) — possible bot amplification', pts: -10 });
-      } else if (engRate > 8) {
-        score += 8;
-        breakdown.push({ cat: 'Engagement Rate', detail: 'Strong engagement (' + engRate.toFixed(1) + '%) — real audience interacting', pts: 8 });
-      } else if (engRate > 3) {
-        score += 4;
-        breakdown.push({ cat: 'Engagement Rate', detail: 'Decent engagement (' + engRate.toFixed(1) + '%)', pts: 4 });
-      } else if (engRate < 0.5 && views > 5000) {
-        score -= 5;
-        breakdown.push({ cat: 'Engagement Rate', detail: 'Very low (' + engRate.toFixed(2) + '%) with high views — possible botted views', pts: -5 });
-      } else {
-        breakdown.push({ cat: 'Engagement Rate', detail: 'Below average (' + engRate.toFixed(2) + '%)', pts: 0 });
-      }
+      if (engRate > 25) { eaScore -= 8; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '% — abnormally high, possible amplification'); }
+      else if (engRate > 8) { eaScore += 8; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '% — strong organic interaction'); }
+      else if (engRate > 3) { eaScore += 4; eaDetails.push('Engagement rate ' + engRate.toFixed(1) + '% — decent'); }
+      else if (engRate < 0.5 && views > 5000) { eaScore -= 5; eaDetails.push('Engagement rate ' + engRate.toFixed(2) + '% with ' + fmtNum(views) + ' views — possible botted views'); }
+      else { eaDetails.push('Engagement rate ' + engRate.toFixed(2) + '% — below average'); }
     }
 
-    // 5b. Reply quality — are replies meaningful discussions or spam?
-    if (replies !== null && likes !== null && likes > 0) {
-      const rlRatio = replies / likes;
-      if (rlRatio > 5) {
-        score -= 18;
-        breakdown.push({ cat: 'Reply Quality', detail: 'Extreme reply/like ratio (' + rlRatio.toFixed(1) + 'x) — likely spam replies or controversial bait', pts: -18 });
-      } else if (rlRatio > 3) {
-        score -= 12;
-        breakdown.push({ cat: 'Reply Quality', detail: 'High reply/like ratio (' + rlRatio.toFixed(1) + 'x) — possible spam or heated argument', pts: -12 });
-      } else if (rlRatio > 1.5) {
-        score -= 4;
-        breakdown.push({ cat: 'Reply Quality', detail: 'Above-average replies (' + rlRatio.toFixed(1) + 'x) — active discussion', pts: -4 });
-      } else if (rlRatio > 0.3) {
-        score += 6;
-        breakdown.push({ cat: 'Reply Quality', detail: 'Healthy discussion ratio (' + rlRatio.toFixed(2) + 'x) — real conversations', pts: 6 });
-      } else {
-        score += 2;
-        breakdown.push({ cat: 'Reply Quality', detail: 'Low reply ratio (' + rlRatio.toFixed(2) + 'x) — passive audience', pts: 2 });
-      }
+    // Reply quality (−10 to +6)
+    if (replies != null && likes != null && likes > 0) {
+      const rl = replies / likes;
+      if (rl > 5) { eaScore -= 10; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x — extreme, likely spam replies'); }
+      else if (rl > 3) { eaScore -= 7; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x — high, spam or controversy'); }
+      else if (rl > 1.5) { eaScore -= 2; eaDetails.push('Reply/like ' + rl.toFixed(1) + 'x — active discussion'); }
+      else if (rl > 0.3) { eaScore += 6; eaDetails.push('Reply/like ' + rl.toFixed(2) + 'x — healthy conversation'); }
+      else { eaScore += 1; eaDetails.push('Reply/like ' + rl.toFixed(2) + 'x — passive audience'); }
     }
 
-    // 5c. Retweet farming vs organic sharing
-    if (retweets !== null && likes !== null && likes > 0) {
-      const rtRatio = retweets / likes;
-      if (rtRatio > 5) {
-        score -= 15;
-        breakdown.push({ cat: 'RT Pattern', detail: 'Extreme RT/like ratio (' + rtRatio.toFixed(1) + 'x) — retweet farming detected', pts: -15 });
-      } else if (rtRatio > 2) {
-        score -= 6;
-        breakdown.push({ cat: 'RT Pattern', detail: 'High RT/like ratio (' + rtRatio.toFixed(1) + 'x) — possible forced sharing', pts: -6 });
-      } else if (rtRatio < 0.3 && likes > 50) {
-        score += 6;
-        breakdown.push({ cat: 'RT Pattern', detail: 'Likes dominate RTs (' + rtRatio.toFixed(2) + 'x) — organic appreciation', pts: 6 });
-      } else {
-        breakdown.push({ cat: 'RT Pattern', detail: 'Normal RT pattern (' + rtRatio.toFixed(2) + 'x)', pts: 0 });
-      }
+    // RT farming (−8 to +5)
+    if (retweets != null && likes != null && likes > 0) {
+      const rt = retweets / likes;
+      if (rt > 5) { eaScore -= 8; eaDetails.push('RT/like ' + rt.toFixed(1) + 'x — retweet farming'); }
+      else if (rt > 2) { eaScore -= 4; eaDetails.push('RT/like ' + rt.toFixed(1) + 'x — high, possible forced sharing'); }
+      else if (rt < 0.3 && likes > 50) { eaScore += 5; eaDetails.push('RT/like ' + rt.toFixed(2) + 'x — organic appreciation'); }
+      else { eaDetails.push('RT/like ' + rt.toFixed(2) + 'x — normal pattern'); }
     }
 
-    // 5d. Quote engagement — discussion quality
-    if (quotes !== null && replies !== null && quotes > 0 && replies > 0) {
-      const qRatio = quotes / replies;
-      if (qRatio > 3 && quotes > 30) {
-        score -= 5;
-        breakdown.push({ cat: 'Discussion Quality', detail: 'High quote/reply ratio (' + qRatio.toFixed(1) + 'x) — people quote instead of discuss', pts: -5 });
-      } else if (qRatio > 1 && quotes > 20) {
-        score += 3;
-        breakdown.push({ cat: 'Discussion Quality', detail: 'Active quoting (' + qRatio.toFixed(1) + 'x) — content sparking conversation', pts: 3 });
-      }
+    // Ghost traffic (−8)
+    if (views != null && views > 10000 && likes != null && likes < 5) {
+      eaScore -= 8; eaDetails.push('Ghost traffic: ' + fmtNum(views) + ' views but near-zero likes');
     }
 
-    // 5e. Ghost traffic / impossible metrics
-    if (views !== null && views > 10000 && likes !== null && likes < 5) {
-      score -= 15;
-      breakdown.push({ cat: 'Traffic Legitimacy', detail: 'High views (' + fmtNum(views) + ') but near-zero likes — ghost traffic likely', pts: -15 });
-    }
-    if (retweets !== null && views !== null && retweets > views && views > 0) {
-      score -= 25;
-      breakdown.push({ cat: 'Traffic Legitimacy', detail: 'Retweets exceed views — impossible metric, data anomaly', pts: -25 });
+    // Impossible metrics (−15)
+    if (retweets != null && views != null && retweets > views && views > 0) {
+      eaScore -= 15; eaDetails.push('Retweets exceed views — impossible, data anomaly');
     }
 
-    // 5f. Raw numbers context
-    if (likes !== null && likes > 5000) {
-      score += 5;
-      breakdown.push({ cat: 'Popularity', detail: 'High like count (' + fmtNum(likes) + ') — broad appeal', pts: 5 });
-    } else if (likes !== null && likes > 1000) {
-      score += 3;
-      breakdown.push({ cat: 'Popularity', detail: 'Good like count (' + fmtNum(likes) + ')', pts: 3 });
-    }
-
-    // 5g. Replies with no likes = possibly botted replies
-    if (replies !== null && likes !== null && replies > 50 && likes < 10) {
-      score -= 10;
-      breakdown.push({ cat: 'Reply Authenticity', detail: 'Many replies (' + fmtNum(replies) + ') but few likes (' + fmtNum(likes) + ') — possible bot replies', pts: -10 });
-    }
+    // Popularity bonus (0-3)
+    if (likes != null && likes > 5000) { eaScore += 3; eaDetails.push('High popularity (' + fmtNum(likes) + ' likes)'); }
+    else if (likes != null && likes > 1000) { eaScore += 2; eaDetails.push('Good like count (' + fmtNum(likes) + ')'); }
   } else {
-    breakdown.push({ cat: 'Engagement', detail: 'No engagement data available — limited analysis', pts: 0 });
+    eaScore = 10;
+    eaDetails.push('No engagement data available — cannot assess authenticity');
   }
 
-  // Clamp
-  score = Math.max(0, Math.min(100, score));
+  eaScore = clamp(eaScore, 0, 30);
+  categories.push({ name: 'Engagement Authenticity', score: eaScore, max: 30, weight: '30%', details: eaDetails });
 
-  // Determine label
+  // ── CATEGORY 3: Trust & Safety (max 25) ──
+  let tsScore = 18; // start trusting
+  const tsDetails = [];
+
+  // CTA impact
+  if (cta.strongCount >= 3) { tsScore -= 12; tsDetails.push(cta.strongCount + ' strong CTAs — aggressive, low trust'); }
+  else if (cta.strongCount === 2) { tsScore -= 8; tsDetails.push('2 strong CTAs — concerning pattern'); }
+  else if (cta.strongCount === 1) { tsScore -= 4; tsDetails.push('1 strong CTA — monitor context'); }
+  else if (cta.softCount > 0) { tsScore -= 1; tsDetails.push(cta.softCount + ' soft CTA(s) — mild promotion'); }
+  else { tsDetails.push('No CTAs — clean'); }
+
+  // Low-quality patterns
+  const criticalPatterns = lowQualityPatterns.filter(p => p.severity === 'critical');
+  const highPatterns = lowQualityPatterns.filter(p => p.severity === 'high');
+  const medPatterns = lowQualityPatterns.filter(p => p.severity === 'medium');
+
+  if (criticalPatterns.length > 0) {
+    tsScore -= 15;
+    tsDetails.push('CRITICAL: ' + criticalPatterns.map(p => p.detail).join('; '));
+  }
+  if (highPatterns.length > 0) {
+    tsScore -= 5 * highPatterns.length;
+    tsDetails.push(highPatterns.length + ' high-severity pattern(s)');
+  }
+  if (medPatterns.length > 0) {
+    tsScore -= 2 * medPatterns.length;
+    tsDetails.push(medPatterns.length + ' medium-severity pattern(s)');
+  }
+
+  // Link safety
+  if (rawLinks > 3) { tsScore -= 3; tsDetails.push(rawLinks + ' links — excessive'); }
+  else if (rawLinks === 1) { tsDetails.push('Single link — normal'); }
+
+  tsScore = clamp(tsScore, 0, 25);
+  categories.push({ name: 'Trust & Safety', score: tsScore, max: 25, weight: '25%', details: tsDetails });
+
+  // ── CATEGORY 4: Spam Indicators (max 15, inverted: fewer = better) ──
+  let spScore = 15; // start clean
+  const spDetails = [];
+
+  if (hashtags > 8) { spScore -= 8; spDetails.push(hashtags + ' hashtags — extreme spam'); }
+  else if (hashtags > 4) { spScore -= 4; spDetails.push(hashtags + ' hashtags — excessive'); }
+  else if (hashtags > 0 && hashtags <= 3) { spDetails.push(hashtags + ' hashtag(s) — moderate'); }
+  else { spDetails.push('No hashtags'); }
+
+  if (emojis > 15) { spScore -= 4; spDetails.push(emojis + ' emojis — spam signal'); }
+  else if (emojis > 10) { spScore -= 2; spDetails.push(emojis + ' emojis — slightly high'); }
+
+  const upperLetters = (text.match(/[A-Z]/g) || []).length;
+  const allLetters = (text.match(/[a-zA-Z]/g) || []).length;
+  if (allLetters > 10 && upperLetters / allLetters > 0.7) {
+    spScore -= 3; spDetails.push('Excessive uppercase — shouting');
+  }
+
+  spScore = clamp(spScore, 0, 15);
+  categories.push({ name: 'Spam Indicators', score: spScore, max: 15, weight: '15%', details: spDetails });
+
+  // ════════════════════════════════════════════════════════════
+  // FINAL SCORE
+  // ════════════════════════════════════════════════════════════
+
+  const totalScore = categories.reduce((s, c) => s + c.score, 0);
+  const totalMax = categories.reduce((s, c) => s + c.max, 0);
+
   let label;
-  if (score >= 80) label = 'High quality — genuine content with real engagement';
-  else if (score >= 65) label = 'Good quality — mostly authentic';
-  else if (score >= 50) label = 'Average — some concerns detected';
-  else if (score >= 35) label = 'Below average — multiple red flags';
+  if (totalScore >= 80) label = 'High quality — genuine, well-crafted content with authentic engagement';
+  else if (totalScore >= 65) label = 'Good quality — mostly authentic with minor concerns';
+  else if (totalScore >= 50) label = 'Average — some positive signals mixed with concerns';
+  else if (totalScore >= 35) label = 'Below average — multiple red flags detected';
   else label = 'Low quality — likely spam, farming, or inauthentic';
 
+  // ── Bounty Verdict ──
+  let verdict, verdictReason;
+  if (totalScore >= 75 && lowQualityPatterns.filter(p => p.severity === 'critical').length === 0 && cta.strongCount <= 1) {
+    verdict = 'Approve';
+    verdictReason = 'Content meets quality standards. ' + (cta.strongCount > 0 ? 'Has mild CTA but within acceptable range.' : 'No aggressive CTAs.') + ' Engagement patterns appear organic.';
+  } else if (totalScore >= 45 || (totalScore >= 35 && lowQualityPatterns.filter(p => p.severity === 'critical').length === 0)) {
+    verdict = 'Manual Review';
+    const concerns = [];
+    if (cta.strongCount > 1) concerns.push(cta.strongCount + ' strong CTAs');
+    if (lowQualityPatterns.length > 0) concerns.push(lowQualityPatterns.length + ' pattern flags');
+    if (eaScore < 15) concerns.push('engagement concerns');
+    verdictReason = 'Mixed signals detected. ' + (concerns.length > 0 ? 'Review: ' + concerns.join(', ') + '.' : 'Score borderline — human judgment needed.');
+  } else {
+    verdict = 'Reject';
+    const reasons = [];
+    if (lowQualityPatterns.filter(p => p.severity === 'critical').length > 0) reasons.push('scam indicators');
+    if (cta.strongCount >= 3) reasons.push('aggressive farming');
+    if (eaScore < 10) reasons.push('inauthentic engagement');
+    if (spScore < 5) reasons.push('spam signals');
+    verdictReason = 'Fails quality thresholds. ' + (reasons.length > 0 ? 'Issues: ' + reasons.join(', ') + '.' : 'Multiple critical failures.');
+  }
+
+  // ── Executive Summary ──
+  const positives = [];
+  const negatives = [];
+  categories.forEach(c => {
+    const ratio = c.score / c.max;
+    if (ratio >= 0.7) positives.push(c.name);
+    else if (ratio < 0.45) negatives.push(c.name);
+  });
+  if (visibleWords > 25) positives.push('good length');
+  if (cta.strongCount === 0 && lowQualityPatterns.filter(p => p.severity === 'critical').length === 0) positives.push('clean trust signals');
+  if (cta.strongCount >= 2) negatives.push('aggressive CTAs');
+  if (lowQualityPatterns.filter(p => p.severity === 'critical').length > 0) negatives.push('scam indicators');
+
+  const summaryParts = [];
+  if (positives.length > 0) summaryParts.push('Strengths: ' + positives.slice(0, 3).join(', ') + '.');
+  if (negatives.length > 0) summaryParts.push('Concerns: ' + negatives.slice(0, 3).join(', ') + '.');
+  summaryParts.push('Overall score ' + totalScore + '/100 — ' + verdict + '.');
+  const executiveSummary = summaryParts.join(' ').slice(0, 300);
+
+  // ── Engagement interpretation ──
+  const engInterp = interpretEngagement(engagement);
+
   return {
-    score,
+    score: totalScore,
     label,
-    trafficLight: score >= 65 ? 'green' : score >= 40 ? 'yellow' : 'red',
-    breakdown,
-    flags: breakdown.filter(b => b.pts < 0).map(b => b.detail),
-    greenFlags: breakdown.filter(b => b.pts > 0).map(b => b.detail),
+    trafficLight: totalScore >= 65 ? 'green' : totalScore >= 40 ? 'yellow' : 'red',
+    categories,
+    cta,
+    contentQuality,
+    lowQualityPatterns,
+    engagementInterpretation: engInterp,
+    verdict,
+    verdictReason,
+    executiveSummary,
     signals: {
-      textLength: tl,
-      wordCount: wc,
-      hashtagCount: hashtags,
-      emojiCount: emojis,
-      linkCount: links.length,
-      hasCallToAction: /follow|like|rt|retweet|share|subscribe/i.test(text),
-      sentiment: detectSentiment(text),
+      visibleWords, visibleChars, hashtagCount: hashtags, emojiCount: emojis,
+      linkCount: rawLinks, mentionCount: mentions, sentiment,
       engagement: engagement || {}
     }
   };
 }
 
-// ── XORA.FINANCE SPECIFIC ANALYSIS ──────────────────────────
+// ══════════════════════════════════════════════════════════════
+// XORA.FINANCE CONTEXTUAL TRUST ANALYSIS
+// ══════════════════════════════════════════════════════════════
+
 function analyzeXora(text, authorHandle, url, resolvedUrls) {
-  // Check if post is about XORA — text keywords, author handle, or post URL
   const authorLower = (authorHandle || '').toLowerCase().replace('@', '');
   const isFromXora = authorLower === 'xora_finance';
   const textMentionsXora = /xora|xrp\s*neobank|xora_finance|xora\.finance|#xora/i.test(text);
-  const urlHasXora = /xora\.finance|xora_finance/i.test(url) || /xora_finance/i.test(url);
-  // Also check resolved URLs (unwrapped t.co links)
   const resolvedHasXora = (resolvedUrls || []).some(u => /xora\.finance/i.test(u));
-  const isXoraRelated = isFromXora || textMentionsXora || urlHasXora || resolvedHasXora;
+  const isXoraRelated = isFromXora || textMentionsXora || /xora\.finance|xora_finance/i.test(url) || resolvedHasXora;
   if (!isXoraRelated) return null;
 
-  const officialHandle = 'xora_finance';
-  const officialDomain = 'xora.finance';
   const flags = [];
   const greenFlags = [];
-  const checks = {};
-  let trustScore = 50; // neutral start
+  const trustBreakdown = [];
+  let trustScore = 50;
 
-  // ── 1. Official account mention ──
-  const mentionsOfficial = /@xora_finance/i.test(text) || /xora_finance/i.test(text);
-  checks.mentionsOfficial = mentionsOfficial;
-  if (mentionsOfficial) {
-    greenFlags.push('Mentions official @xora_finance account');
-    trustScore += 15;
+  // ── 1. Account verification ──
+  if (isFromXora) {
+    trustScore += 25;
+    greenFlags.push('Posted from official @xora_finance account');
+    trustBreakdown.push({ cat: 'Account', detail: 'Official @xora_finance account', pts: 25 });
+  } else if (/xora/i.test(authorLower) && authorLower !== 'xora_finance') {
+    trustScore -= 20;
+    flags.push('Author @' + authorLower + ' may impersonate official @xora_finance');
+    trustBreakdown.push({ cat: 'Account', detail: 'Possible impersonator — name contains "xora" but not official', pts: -20 });
   } else {
-    flags.push('Does NOT mention @xora_finance — could be impersonator');
-    trustScore -= 10;
+    const mentionsOfficial = /@xora_finance/i.test(text);
+    if (mentionsOfficial) {
+      trustScore += 10;
+      greenFlags.push('References official @xora_finance account');
+      trustBreakdown.push({ cat: 'Account', detail: 'Mentions @xora_finance but author is third-party', pts: 10 });
+    } else {
+      trustScore -= 5;
+      trustBreakdown.push({ cat: 'Account', detail: 'Third-party post, no @xora_finance mention', pts: -5 });
+    }
   }
 
-  // ── 2. Link analysis ──
-  const links = text.match(/https?:\/\/[^\s]+/gi) || [];
-  // Merge resolved URLs for complete picture
+  // ── 2. Link verification (contextual) ──
+  const links = (text.match(/https?:\/\/[^\s]+/gi) || []);
   const allLinks = [...new Set([...links, ...(resolvedUrls || [])])];
-  checks.links = allLinks;
-  checks.linkCount = allLinks.length;
 
-  const hasOfficialLink = allLinks.some(l => /xora\.finance/i.test(l));
-  const hasFakeLink = allLinks.some(l =>
-    /xorafinance\.com/i.test(l) ||
-    /xora-?finance\.(com|net|org|xyz|io)/i.test(l) ||
-    /xora\.(?!finance)/i.test(l)
+  const officialLinks = allLinks.filter(l => /xora\.finance/i.test(l));
+  const fakeLinks = allLinks.filter(l =>
+    /xorafinance\.com/i.test(l) || /xora-?finance\.(com|net|org|xyz|io)/i.test(l) || /xora\.(?!finance)/i.test(l)
   );
-  // t.co links are Twitter's native shortener — not suspicious by themselves
-  const hasUnknownShortened = allLinks.some(l => /bit\.ly|tinyurl/i.test(l));
-  const hasTcoLinks = links.some(l => /t\.co\//i.test(l));
+  const referralLinks = allLinks.filter(l => /[?&]ref=|\/ref\/|\/invite\//i.test(l));
+  const shortenedLinks = allLinks.filter(l => /bit\.ly|tinyurl/i.test(l));
+  const tcoLinks = links.filter(l => /t\.co\//i.test(l));
 
-  checks.hasOfficialLink = hasOfficialLink;
-  checks.hasFakeLink = hasFakeLink;
-
-  if (hasOfficialLink) {
-    greenFlags.push('Links to official xora.finance domain');
+  if (officialLinks.length > 0) {
     trustScore += 15;
+    greenFlags.push('Links to official xora.finance domain');
+    trustBreakdown.push({ cat: 'Links', detail: officialLinks.length + ' official link(s) verified', pts: 15 });
   }
-  if (hasFakeLink) {
-    flags.push('Contains FAKE XORA domain — HIGH scam risk');
+  if (fakeLinks.length > 0) {
     trustScore -= 30;
+    flags.push('FAKE XORA domain detected: ' + fakeLinks[0]);
+    trustBreakdown.push({ cat: 'Links', detail: 'Fake/cloned domain — HIGH scam risk', pts: -30 });
   }
-  if (hasUnknownShortened) {
-    flags.push('Uses shortened link (bit.ly/tinyurl) — verify destination');
-    trustScore -= 10;
+  if (referralLinks.length > 0) {
+    trustScore -= 3;
+    flags.push('Contains referral tracking link — may incentivize promotion');
+    trustBreakdown.push({ cat: 'Links', detail: 'Referral link detected — possible incentivized shilling', pts: -3 });
   }
-  if (hasTcoLinks && !hasOfficialLink && links.length > 0) {
-    // t.co links are wrapped — can't verify destination from text alone
-    checks.linkWrapped = true;
+  if (shortenedLinks.length > 0) {
+    trustScore -= 8;
+    flags.push('Uses shortened link — destination cannot be verified');
+    trustBreakdown.push({ cat: 'Links', detail: 'Shortened URL — unverifiable destination', pts: -8 });
+  }
+  if (tcoLinks.length > 0 && officialLinks.length === 0 && fakeLinks.length === 0) {
+    trustBreakdown.push({ cat: 'Links', detail: 't.co wrapped — destination verified via fxtwitter: ' + (resolvedHasXora ? 'xora.finance' : 'unknown'), pts: 0 });
   }
   if (allLinks.length === 0) {
-    greenFlags.push('No external links — lower phishing risk');
+    greenFlags.push('No external links');
+    trustBreakdown.push({ cat: 'Links', detail: 'No external links', pts: 0 });
   }
 
-  // ── 2b. Official account bonus ──
-  if (isFromXora) {
-    greenFlags.push('Post from official @xora_finance account');
-    trustScore += 20;
-  }
-
-  // ── 3. CTA (Call to Action) analysis ──
-  const ctaPatterns = [
-    { re: /sign\s*up|register|join|open\s*(your)?\s*account/i, label: 'Sign-up CTA' },
-    { re: /deposit|send\s*xrp|transfer/i, label: 'Deposit CTA' },
-    { re: /click\s*(the\s*)?link|link\s*in\s*(bio|thread|comments)/i, label: 'Link redirect CTA' },
-    { re: /dm\s*(me|for)|message\s*me/i, label: 'DM solicitation' },
-    { re: /limited\s*time|hurry|act\s*now|last\s*chance|ending\s*soon/i, label: 'Urgency CTA' },
-    { re: /follow.*like.*rt|like.*retweet.*follow|rt\s*&?\s*follow/i, label: 'Engagement bait CTA' },
-    { re: /whitelist|wl\s*spot|guaranteed\s*spot/i, label: 'Whitelist CTA' },
-    { re: /claim|claim\s*now|claim\s*your/i, label: 'Claim CTA' },
-  ];
-
-  const detectedCtas = [];
-  ctaPatterns.forEach(p => {
-    if (p.re.test(text)) {
-      detectedCtas.push(p.label);
-    }
-  });
-  checks.ctas = detectedCtas;
-
-  // High-risk CTAs
-  const highRiskCtas = ['Link redirect CTA', 'DM solicitation', 'Urgency CTA', 'Claim CTA'];
-  const hasHighRiskCta = detectedCtas.some(c => highRiskCtas.includes(c));
-  if (hasHighRiskCta) {
-    flags.push('High-risk CTA detected: ' + detectedCtas.filter(c => highRiskCtas.includes(c)).join(', '));
+  // ── 3. CTA analysis (XORA-specific) ──
+  const cta = classifyCtas(text);
+  if (cta.strongCount >= 2) {
     trustScore -= 15;
-  }
-  if (detectedCtas.length > 2) {
-    flags.push('Multiple CTAs (' + detectedCtas.length + ') — aggressive promotion pattern');
+    flags.push('Aggressive CTAs: ' + cta.detected.filter(c => c.strength === 'strong').map(c => c.label).join(', '));
+    trustBreakdown.push({ cat: 'CTAs', detail: cta.strongCount + ' strong CTAs — aggressive promotion', pts: -15 });
+  } else if (cta.strongCount === 1) {
     trustScore -= 5;
-  }
-  if (detectedCtas.length === 0) {
-    greenFlags.push('No aggressive CTAs detected');
+    trustBreakdown.push({ cat: 'CTAs', detail: '1 strong CTA: ' + cta.detected.find(c => c.strength === 'strong')?.label, pts: -5 });
+  } else if (cta.total === 0) {
     trustScore += 5;
+    greenFlags.push('No CTAs — informational post');
+    trustBreakdown.push({ cat: 'CTAs', detail: 'No CTAs detected', pts: 5 });
+  } else {
+    trustBreakdown.push({ cat: 'CTAs', detail: cta.softCount + ' soft CTA(s) — promotional but not aggressive', pts: 0 });
   }
 
-  // ── 4. Hashtag analysis ──
-  const xoraHashtags = (text.match(/#xora|#xorafinance|#xrpl|#xrp\s*neobank|#xora\s*finance/gi) || []);
-  const spammyHashtags = (text.match(/#crypto|#defi|#airdrop|#giveaway|#whitelist|#freemoney|#passive\s*income/gi) || []);
-  checks.xoraHashtags = xoraHashtags;
-  checks.spammyHashtags = spammyHashtags;
-
-  if (xoraHashtags.length > 0) {
-    greenFlags.push('Uses relevant XORA/XRP hashtags');
-    trustScore += 5;
-  }
-  if (spammyHashtags.length > 2) {
-    flags.push('Spammy hashtag cluster: ' + spammyHashtags.slice(0, 3).join(', '));
-    trustScore -= 10;
-  }
-
-  // ── 5. APY / yield claims ──
+  // ── 4. APY/yield claims ──
   const apyMatch = text.match(/(\d+(?:\.\d+)?)\s*%\s*(?:apy|apy\s*value|yield)/i);
-  checks.claimedApy = apyMatch ? parseFloat(apyMatch[1]) : null;
   if (apyMatch) {
     const claimed = parseFloat(apyMatch[1]);
     if (claimed > 25) {
-      flags.push('Claims ' + claimed + '% APY — exceeds official 22% maximum');
       trustScore -= 15;
+      flags.push('Claims ' + claimed + '% APY — exceeds official 22% maximum');
+      trustBreakdown.push({ cat: 'APY', detail: claimed + '% exceeds official max (22%)', pts: -15 });
     } else if (claimed <= 22) {
-      greenFlags.push('APY claim (' + claimed + '%) within official range');
       trustScore += 5;
+      greenFlags.push('APY claim (' + claimed + '%) within official range');
+      trustBreakdown.push({ cat: 'APY', detail: claimed + '% within official range (≤22%)', pts: 5 });
     }
   }
 
-  // ── 6. Impersonation check ──
-  const isImpersonator = /xora/i.test(authorLower) && authorLower !== officialHandle;
-  checks.isImpersonator = isImpersonator;
-  if (isImpersonator) {
-    flags.push('Author @' + authorLower + ' may impersonate official @' + officialHandle);
-    trustScore -= 20;
-  }
-
-  // ── 7. Scam keyword check ──
-  const scamPatterns = [
-    /guaranteed\s*profit/i,
-    /risk[\s-]*free/i,
-    /double\s*(your|my)\s*(xrp|crypto)/i,
-    /send\s*\d+.*get\s*\d+/i,
-    /seed\s*phrase|private\s*key|mnemonic/i,
-    /pre[\s-]*order.*card/i,
-    /kyc\s*bypass|no\s*kyc/i,
+  // ── 5. Scam keywords ──
+  const scamKw = [
+    { re: /guaranteed\s+profit/i, label: 'Guaranteed profit claim' },
+    { re: /risk[\s-]*free/i, label: 'Risk-free claim' },
+    { re: /double\s*(your|my)\s*(xrp|crypto)/i, label: 'Double-your-money' },
+    { re: /send\s*\d+.*get\s*\d+/i, label: 'Send-to-receive' },
+    { re: /seed\s*phrase|private\s*key/i, label: 'Seed phrase fishing' },
+    { re: /kyc\s*bypass|no\s+kyc/i, label: 'KYC bypass' },
   ];
-  scamPatterns.forEach(p => {
-    if (p.test(text)) {
-      flags.push('Scam keyword pattern: ' + p.source.slice(0, 30) + '...');
+  scamKw.forEach(s => {
+    if (s.re.test(text)) {
       trustScore -= 15;
+      flags.push('Scam keyword: ' + s.label);
+      trustBreakdown.push({ cat: 'Scam', detail: s.label, pts: -15 });
     }
   });
 
-  // Clamp trust score
-  trustScore = Math.max(0, Math.min(100, trustScore));
+  trustScore = clamp(trustScore, 0, 100);
+
+  let trustLabel;
+  if (trustScore >= 80) trustLabel = 'Highly trusted — strong official signals';
+  else if (trustScore >= 65) trustLabel = 'Likely legitimate — mostly verified';
+  else if (trustScore >= 45) trustLabel = 'Mixed signals — verify before acting';
+  else trustLabel = 'Untrusted — multiple risk factors';
 
   return {
-    isXoraPost: true,
-    trustScore,
-    trafficLight: trustScore >= 65 ? 'green' : trustScore >= 40 ? 'yellow' : 'red',
-    checks,
-    flags,
-    greenFlags,
-    summary: generateXoraSummary(checks, flags, greenFlags, trustScore)
+    isXoraPost: true, trustScore,
+    trafficLight: trustScore >= 65 ? 'green' : trustScore >= 45 ? 'yellow' : 'red',
+    trustLabel, flags, greenFlags, trustBreakdown,
+    checks: {
+      isFromXora, mentionsOfficial: /@xora_finance/i.test(text),
+      officialLinks: officialLinks.length, fakeLinks: fakeLinks.length,
+      referralLinks: referralLinks.length, shortenedLinks: shortenedLinks.length,
+      cta: cta.detected, claimedApy: apyMatch ? parseFloat(apyMatch[1]) : null,
+      isImpersonator: /xora/i.test(authorLower) && authorLower !== 'xora_finance',
+      linkWrapped: tcoLinks.length > 0 && officialLinks.length === 0
+    }
   };
 }
 
-function generateXoraSummary(checks, flags, greenFlags, score) {
-  const parts = [];
-  if (checks.mentionsOfficial) {
-    parts.push('Post references the official @xora_finance account');
-  } else {
-    parts.push('Post does NOT reference @xora_finance — proceed with caution');
-  }
-  if (checks.hasOfficialLink) parts.push('Contains verified xora.finance link');
-  if (checks.hasFakeLink) parts.push('⚠ Contains a fake/cloned XORA domain');
-  if (checks.ctas.length > 0) parts.push('CTAs detected: ' + checks.ctas.join(', '));
-  if (checks.claimedApy) {
-    if (checks.claimedApy > 22) parts.push('APY claim exceeds official maximum');
-    else parts.push('APY claim within official range');
-  }
-  if (checks.isImpersonator) parts.push('Author may be impersonating XORA');
-  return parts.join('. ') + '. Trust score: ' + score + '/100.';
-}
+// ══════════════════════════════════════════════════════════════
+// REPLY FETCHING & ANALYSIS
+// ══════════════════════════════════════════════════════════════
 
-// ── Reply fetcher (xcancel.com scraping) ──────────────────────
 function parseRepliesFromHtml(html) {
   const replies = [];
-  // Split by timeline-item
   const parts = html.split('<div class="timeline-item ');
   for (let i = 1; i < parts.length; i++) {
     const item = parts[i];
-    // Author
     const nameM = item.match(/class="fullname"[^>]*>([^<]+)/);
     const handleM = item.match(/class="username"[^>]*>([^<]+)/);
-    // Content
     const contentM = item.match(/class="tweet-content[^"]*"[^>]*>([\s\S]*?)<\/div>/);
     const text = contentM ? contentM[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
-    // Stats
     const statMatches = [...item.matchAll(/icon-(comment|retweet|heart|views)"[^>]*><\/span>\s*([^<]*)/g)];
     const stats = {};
     statMatches.forEach(m => {
@@ -550,25 +794,17 @@ function parseRepliesFromHtml(html) {
       const val = m[2].trim().replace(/,/g, '');
       stats[key] = val && !isNaN(val) ? parseInt(val, 10) : null;
     });
-    // Is this a reply?
     const isReply = item.includes('replying-to');
     const replyToM = item.match(/replying-to.*?href="\/(\w+)"/);
-    // Tweet link (for ID)
     const linkM = item.match(/href="\/(\w+)\/status\/(\d+)/);
-
     if (text || nameM) {
       replies.push({
         author: nameM ? nameM[1].trim() : 'Unknown',
         handle: handleM ? handleM[1].trim() : '@unknown',
-        text: text,
-        replies: stats.replies || null,
-        retweets: stats.retweets || null,
-        likes: stats.likes || null,
-        views: stats.views || null,
-        isReply: isReply,
-        replyTo: replyToM ? '@' + replyToM[1] : null,
-        tweetId: linkM ? linkM[2] : null,
-        authorIsOP: false // will be set later
+        text, replies: stats.replies || null, retweets: stats.retweets || null,
+        likes: stats.likes || null, views: stats.views || null,
+        isReply, replyTo: replyToM ? '@' + replyToM[1] : null,
+        tweetId: linkM ? linkM[2] : null, authorIsOP: false
       });
     }
   }
@@ -585,48 +821,39 @@ async function fetchRepliesFromXcancel(tweetUrl, maxReplies) {
   const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
   const pathPart = tweetUrl.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
   const baseUrl = 'https://xcancel.com/' + pathPart;
-
-  let allReplies = [];
-  let cursor = null;
-  let pages = 0;
-  const maxPages = 3; // limit pagination
+  let allReplies = [], cursor = null, pages = 0;
+  const maxPages = 3;
 
   try {
-    // First page
-    console.log('[replies] Fetching page 1 from xcancel...');
+    console.log('[replies] Fetching page 1...');
     let resp = await fetch(baseUrl, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12000) });
-    if (!resp.ok) throw new Error('xcancel returned ' + resp.status);
+    if (!resp.ok) throw new Error('xcancel ' + resp.status);
     let html = await resp.text();
+    // Check for captcha
+    if (html.includes('Verifying your browser') || html.includes('antibot')) {
+      throw new Error('xcancel rate-limited (captcha)');
+    }
     allReplies = parseRepliesFromHtml(html);
     cursor = extractCursor(html);
     pages++;
-
-    // Get author handle from first post on page to identify OP
     const opMatch = html.match(/data-username="(\w+)"/);
     const opHandle = opMatch ? '@' + opMatch[1].toLowerCase() : null;
-    allReplies.forEach(r => {
-      r.authorIsOP = opHandle && r.handle.toLowerCase().replace('@', '') === opHandle.replace('@', '');
-    });
+    allReplies.forEach(r => { r.authorIsOP = opHandle && r.handle.toLowerCase().replace('@', '') === opHandle.replace('@', ''); });
 
-    // Paginate
     while (cursor && allReplies.length < maxReplies && pages < maxPages) {
       pages++;
-      console.log('[replies] Fetching page ' + pages + '...');
-      await new Promise(r => setTimeout(r, 800)); // rate limit
-      const pageUrl = baseUrl + '?cursor=' + encodeURIComponent(cursor);
-      resp = await fetch(pageUrl, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12000) });
+      await new Promise(r => setTimeout(r, 800));
+      resp = await fetch(baseUrl + '?cursor=' + encodeURIComponent(cursor), { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12000) });
       if (!resp.ok) break;
       html = await resp.text();
-      const newReplies = parseRepliesFromHtml(html);
-      newReplies.forEach(r => {
-        r.authorIsOP = opHandle && r.handle.toLowerCase().replace('@', '') === opHandle.replace('@', '');
-      });
-      allReplies = allReplies.concat(newReplies);
+      if (html.includes('Verifying your browser') || html.includes('antibot')) break;
+      const nr = parseRepliesFromHtml(html);
+      nr.forEach(r => { r.authorIsOP = opHandle && r.handle.toLowerCase().replace('@', '') === opHandle.replace('@', ''); });
+      allReplies = allReplies.concat(nr);
       cursor = extractCursor(html);
     }
-
-    console.log('[replies] Got ' + allReplies.length + ' items across ' + pages + ' pages');
-    return { replies: allReplies.slice(0, maxReplies), opHandle };
+    console.log('[replies] Got ' + allReplies.length + ' items');
+    return { replies: allReplies.slice(0, maxReplies), opHandle, error: null };
   } catch (e) {
     console.log('[replies] Error:', e.message);
     return { replies: [], opHandle: null, error: e.message };
@@ -635,11 +862,15 @@ async function fetchRepliesFromXcancel(tweetUrl, maxReplies) {
 
 function analyzeReplyQuality(replies, opHandle) {
   if (!replies || replies.length === 0) {
-    return { score: null, detail: 'No replies fetched', replies: [], summary: 'Could not load replies for analysis.' };
+    return {
+      score: null, label: 'Replies unavailable', trafficLight: null,
+      breakdown: [], flags: [], greenFlags: [], stats: null, sampleReplies: [],
+      unavailableReason: 'Could not load replies. X/Twitter rate-limits third-party scrapers. Reply quality analysis requires fetching actual reply content, which is currently blocked.',
+      suggestion: 'Try again later when rate limits reset, or check replies manually on X.'
+    };
   }
 
   const realReplies = replies.filter(r => r.isReply);
-  const originalPosts = replies.filter(r => !r.isReply);
   const opReplies = replies.filter(r => r.authorIsOP);
   const uniqueAuthors = new Set(replies.map(r => r.handle.toLowerCase()));
 
@@ -648,297 +879,162 @@ function analyzeReplyQuality(replies, opHandle) {
   const flags = [];
   const greenFlags = [];
 
-  // 1. OP engagement — did the original poster reply?
+  // OP engagement
   if (opReplies.length > 0) {
-    score += 10;
-    greenFlags.push('OP engaged in discussion (' + opReplies.length + ' replies)');
-    breakdown.push({ cat: 'OP Engagement', detail: 'Original author replied ' + opReplies.length + ' time(s) — active discussion', pts: 10 });
+    score += 10; greenFlags.push('OP replied ' + opReplies.length + ' time(s)');
+    breakdown.push({ cat: 'OP Engagement', detail: 'Original author engaged ' + opReplies.length + ' time(s) — active discussion', pts: 10 });
   } else {
     score -= 3;
     breakdown.push({ cat: 'OP Engagement', detail: 'OP did not reply — one-way broadcast', pts: -3 });
   }
 
-  // 2. Unique participants — real discussion or same people?
-  const participantRatio = uniqueAuthors.size / Math.max(replies.length, 1);
-  if (participantRatio > 0.7) {
-    score += 8;
-    greenFlags.push('Diverse participants (' + uniqueAuthors.size + ' unique authors in ' + replies.length + ' posts)');
-    breakdown.push({ cat: 'Participant Diversity', detail: uniqueAuthors.size + ' unique voices in ' + replies.length + ' posts — real community discussion', pts: 8 });
-  } else if (participantRatio > 0.4) {
-    score += 3;
-    breakdown.push({ cat: 'Participant Diversity', detail: uniqueAuthors.size + ' unique authors in ' + replies.length + ' posts — moderate diversity', pts: 3 });
-  } else {
-    score -= 5;
-    flags.push('Low participant diversity — same people replying repeatedly');
-    breakdown.push({ cat: 'Participant Diversity', detail: 'Only ' + uniqueAuthors.size + ' unique authors in ' + replies.length + ' posts — repetitive', pts: -5 });
-  }
+  // Participant diversity
+  const ratio = uniqueAuthors.size / Math.max(replies.length, 1);
+  if (ratio > 0.7) { score += 8; greenFlags.push(uniqueAuthors.size + ' unique voices'); breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique authors — real community', pts: 8 }); }
+  else if (ratio > 0.4) { score += 3; breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique — moderate', pts: 3 }); }
+  else { score -= 5; flags.push('Low diversity'); breakdown.push({ cat: 'Diversity', detail: uniqueAuthors.size + '/' + replies.length + ' unique — repetitive', pts: -5 }); }
 
-  // 3. Reply content quality — are replies substantive or empty?
-  const substantiveReplies = realReplies.filter(r => r.text.split(/\s+/).length > 5);
-  const emptyReplies = realReplies.filter(r => r.text.length < 10);
-  const subRatio = realReplies.length > 0 ? substantiveReplies.length / realReplies.length : 0;
+  // Reply depth
+  const substantive = realReplies.filter(r => r.text.split(/\s+/).length > 5);
+  const subRatio = realReplies.length > 0 ? substantive.length / realReplies.length : 0;
+  if (subRatio > 0.7) { score += 10; greenFlags.push(Math.round(subRatio * 100) + '% substantive replies'); breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive (>5 words)', pts: 10 }); }
+  else if (subRatio > 0.4) { score += 3; breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive — mixed', pts: 3 }); }
+  else { score -= 5; breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive — mostly shallow', pts: -5 }); }
 
-  if (subRatio > 0.7) {
-    score += 10;
-    greenFlags.push('High-quality replies (' + Math.round(subRatio * 100) + '% substantive)');
-    breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% of replies have real substance (>5 words)', pts: 10 });
-  } else if (subRatio > 0.4) {
-    score += 3;
-    breakdown.push({ cat: 'Reply Depth', detail: Math.round(subRatio * 100) + '% substantive replies — mixed quality', pts: 3 });
-  } else {
-    score -= 5;
-    flags.push('Most replies are low-effort (<5 words)');
-    breakdown.push({ cat: 'Reply Depth', detail: 'Only ' + Math.round(subRatio * 100) + '% substantive — most replies are empty/shallow', pts: -5 });
-  }
-
-  // 4. Engagement spread — do some replies get likes (real discussion)?
-  const repliedWithLikes = realReplies.filter(r => r.likes !== null && r.likes > 5);
-  if (repliedWithLikes.length > realReplies.length * 0.3 && realReplies.length > 3) {
-    score += 7;
-    greenFlags.push('Multiple replies have engagement — real conversations happening');
-    breakdown.push({ cat: 'Reply Engagement', detail: repliedWithLikes.length + '/' + realReplies.length + ' replies have >5 likes — active threads', pts: 7 });
-  } else if (repliedWithLikes.length > 1) {
-    breakdown.push({ cat: 'Reply Engagement', detail: repliedWithLikes.length + ' replies with >5 likes — some engagement', pts: 0 });
-  } else {
-    score -= 3;
-    breakdown.push({ cat: 'Reply Engagement', detail: 'Replies have near-zero engagement — possible bot/fake replies', pts: -3 });
-  }
-
-  // 5. Bot patterns — identical or near-identical replies
+  // Bot/spam detection
   const texts = realReplies.map(r => r.text.toLowerCase().trim());
   const uniqueTexts = new Set(texts);
-  const duplicateRatio = realReplies.length > 0 ? 1 - (uniqueTexts.size / realReplies.length) : 0;
-  if (duplicateRatio > 0.3) {
-    score -= 15;
-    flags.push('High duplicate reply content (' + Math.round(duplicateRatio * 100) + '% similar) — bot/spam pattern');
-    breakdown.push({ cat: 'Duplicate Detection', detail: Math.round(duplicateRatio * 100) + '% of replies are near-identical — likely bot spam', pts: -15 });
-  } else if (duplicateRatio > 0.1) {
-    score -= 5;
-    flags.push('Some duplicate replies detected (' + Math.round(duplicateRatio * 100) + '%)');
-    breakdown.push({ cat: 'Duplicate Detection', detail: Math.round(duplicateRatio * 100) + '% similar replies — mild concern', pts: -5 });
+  const dupRatio = realReplies.length > 0 ? 1 - (uniqueTexts.size / realReplies.length) : 0;
+  if (dupRatio > 0.3) { score -= 15; flags.push('Duplicate replies: ' + Math.round(dupRatio * 100) + '%'); breakdown.push({ cat: 'Bot Detection', detail: Math.round(dupRatio * 100) + '% near-identical — bot spam', pts: -15 }); }
+
+  let spamCount = 0;
+  realReplies.forEach(r => { if (/follow\s+back|like\s+and\s+rt|giveaway|dm\s+for|link\s+in\s+bio/i.test(r.text)) spamCount++; });
+  if (spamCount > realReplies.length * 0.2) {
+    score -= 10; flags.push(Math.round(spamCount / realReplies.length * 100) + '% spam replies');
+    breakdown.push({ cat: 'Spam Replies', detail: Math.round(spamCount / realReplies.length * 100) + '% contain farming CTAs', pts: -10 });
   }
 
-  // 6. Spam/CTA in replies
-  let spamReplyCount = 0;
-  realReplies.forEach(r => {
-    if (/follow\s+back|like\s+and\s+rt|giveaway|dm\s+for|check\s+my|link\s+in\s+bio/i.test(r.text)) {
-      spamReplyCount++;
-    }
-  });
-  const spamRatio = realReplies.length > 0 ? spamReplyCount / realReplies.length : 0;
-  if (spamRatio > 0.2) {
-    score -= 10;
-    flags.push('Spam replies detected (' + Math.round(spamRatio * 100) + '% contain CTAs/farming)');
-    breakdown.push({ cat: 'Spam Replies', detail: Math.round(spamRatio * 100) + '% of replies contain engagement bait/spam', pts: -10 });
-  }
-
-  // 7. Follower weight — check if repliers look like real accounts (via views)
-  // High views on replies = real people seeing them
-  const totalReplyViews = realReplies.reduce((sum, r) => sum + (r.views || 0), 0);
-  const avgReplyViews = realReplies.length > 0 ? totalReplyViews / realReplies.length : 0;
-  if (avgReplyViews > 10000) {
-    score += 5;
-    greenFlags.push('Replies have significant visibility (' + fmtNum(Math.round(avgReplyViews)) + ' avg views)');
-    breakdown.push({ cat: 'Reply Visibility', detail: 'Average ' + fmtNum(Math.round(avgReplyViews)) + ' views per reply — real audience', pts: 5 });
-  }
-
-  score = Math.max(0, Math.min(100, score));
-
+  score = clamp(score, 0, 100);
   let label;
-  if (score >= 80) label = 'Excellent discussion quality — genuine community engagement';
-  else if (score >= 65) label = 'Good discussion — mostly real conversations';
-  else if (score >= 50) label = 'Average discussion — some noise mixed in';
-  else if (score >= 35) label = 'Below average — significant spam/bot activity in replies';
-  else label = 'Poor discussion quality — likely manipulated';
+  if (score >= 80) label = 'Excellent — genuine community discussion';
+  else if (score >= 65) label = 'Good — mostly real conversations';
+  else if (score >= 50) label = 'Average — mixed quality';
+  else if (score >= 35) label = 'Below average — significant noise';
+  else label = 'Poor — likely manipulated';
 
   return {
-    score,
-    label,
+    score, label,
     trafficLight: score >= 65 ? 'green' : score >= 40 ? 'yellow' : 'red',
-    breakdown,
-    flags,
-    greenFlags,
+    breakdown, flags, greenFlags,
     stats: {
-      totalReplies: replies.length,
-      realReplies: realReplies.length,
-      originalPosts: originalPosts.length,
-      opReplies: opReplies.length,
-      uniqueAuthors: uniqueAuthors.size,
-      substantiveReplies: substantiveReplies.length,
-      emptyReplies: emptyReplies.length,
-      spamReplies: spamReplyCount
+      totalReplies: replies.length, realReplies: realReplies.length,
+      opReplies: opReplies.length, uniqueAuthors: uniqueAuthors.size,
+      substantiveReplies: substantive.length, spamReplies: spamCount
     },
     sampleReplies: realReplies.slice(0, 10).map(r => ({
-      author: r.author,
-      handle: r.handle,
-      text: r.text.slice(0, 200),
-      likes: r.likes,
-      replies: r.replies,
-      isOP: r.authorIsOP
+      author: r.author, handle: r.handle, text: r.text.slice(0, 200),
+      likes: r.likes, replies: r.replies, isOP: r.authorIsOP
     }))
   };
 }
 
-// ── API ──────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// API ROUTES
+// ══════════════════════════════════════════════════════════════
+
 app.post('/api/analyze', async (req, res) => {
   const { url } = req.body;
-
   if (!url || !url.match(/(x\.com|twitter\.com)\/\w+\/status\/\d+/)) {
     return res.status(400).json({ error: 'Invalid X/Twitter post URL' });
   }
-
   const tweetId = extractTweetId(url);
-  if (!tweetId) {
-    return res.status(400).json({ error: 'Could not extract tweet ID from URL' });
-  }
+  if (!tweetId) return res.status(400).json({ error: 'Could not extract tweet ID' });
 
   try {
-    // Step 1: Get post data — try oembed first, fxtwitter as fallback
     console.log('[1/3] Fetching post data...');
-    let postInfo = null;
-    let engagement = null;
+    let postInfo = null, engagement = null;
 
-    // Try oembed first
     try {
       const oembed = await fetchOembed(url);
       const parsed = parseOembedHtml(oembed.html || '');
       postInfo = {
         author: parsed.displayName || oembed.author_name || 'Unknown',
         authorHandle: parsed.handle || '@' + (oembed.author_name || 'unknown'),
-        text: parsed.text || null,
-        date: parsed.date || null,
-        url: url,
-        tweetId: tweetId
+        text: parsed.text || null, date: parsed.date || null, url, tweetId
       };
-    } catch (e) {
-      console.log('  Oembed failed:', e.message);
-    }
+    } catch (e) { console.log('  Oembed failed:', e.message); }
 
-    // fxtwitter for engagement + fill missing post info
-    console.log('[2/3] Fetching engagement via fxtwitter...');
+    console.log('[2/3] Fetching engagement...');
     const fxData = await fetchFxTwitter(url);
-    if (fxData) {
-      engagement = fxData;
-      console.log('  fxtwitter data:', JSON.stringify(engagement));
-    }
+    if (fxData) engagement = fxData;
 
-    // If oembed failed, try to get post info from fxtwitter's full tweet data
-    if (!postInfo || !postInfo.text || postInfo.text === '(could not extract text)') {
-      try {
-        const fxFullUrl = 'https://api.fxtwitter.com/' + url.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
-        const fxResp = await fetch(fxFullUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        if (fxResp.ok) {
-          const fxFull = await fxResp.json();
-          const t = fxFull.tweet;
-          if (t) {
-            postInfo = postInfo || {};
-            postInfo.author = postInfo.author || t.author?.name || 'Unknown';
-            postInfo.authorHandle = postInfo.authorHandle || '@' + (t.author?.screen_name || 'unknown');
-            postInfo.text = postInfo.text || t.text || '(could not extract text)';
-            postInfo.date = postInfo.date || t.created_at || null;
-            if (engagement) {
-              engagement.likes = engagement.likes ?? t.likes ?? null;
-              engagement.retweets = engagement.retweets ?? t.retweets ?? null;
-              engagement.replies = engagement.replies ?? t.replies ?? null;
-              engagement.views = engagement.views ?? t.views ?? null;
-            }
-            console.log('  fxtwitter full tweet data used for post info');
-          }
-        }
-      } catch (e) {
-        console.log('  fxtwitter full fetch failed:', e.message);
-      }
-    }
-
-    if (!postInfo) {
-      return res.status(500).json({ error: 'Could not fetch tweet data. The tweet may be deleted or private.' });
-    }
-
-    // Ensure required fields
-    postInfo.text = postInfo.text || '(could not extract text)';
-    postInfo.authorHandle = postInfo.authorHandle || '@unknown';
-
-    // Fallback: syndication API for missing engagement
-    if (!engagement || Object.values(engagement).every(v => v === null)) {
-      const syndication = await fetchSyndication(tweetId);
-      if (syndication) {
-        if (!engagement) engagement = {};
-        engagement.likes = engagement.likes ?? syndication.likes ?? syndication.favorite_count ?? null;
-        engagement.retweets = engagement.retweets ?? syndication.retweets ?? syndication.retweet_count ?? null;
-        engagement.replies = engagement.replies ?? syndication.replies ?? syndication.reply_count ?? null;
-        engagement.views = engagement.views ?? syndication.views?.count ?? syndication.views ?? null;
-        engagement.quotes = engagement.quotes ?? syndication.quotes ?? syndication.quote_count ?? null;
-        console.log('  Syndication fallback:', JSON.stringify(engagement));
-      }
-    }
-
-    console.log('[3/3] Analysis complete.');
-
-    // Extract actual URLs from fxtwitter (resolves t.co wrappers)
-    let resolvedUrls = [];
-    let cardDescription = '';
+    // Fill missing from fxtwitter full
+    let resolvedUrls = [], cardDescription = '';
     try {
-      const fxFullUrl = 'https://api.fxtwitter.com/' + url.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
-      const fxResp = await fetch(fxFullUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-      if (fxResp.ok) {
-        const fxFull = await fxResp.json();
-        const t = fxFull.tweet;
-        if (t) {
-          // Get actual URLs from card or urls field
-          if (t.card && t.card.url) resolvedUrls.push(t.card.url);
-          if (t.card && t.card.domain) resolvedUrls.push('https://' + t.card.domain);
-          if (t.card && t.card.description) cardDescription = t.card.description;
-          if (t.urls && Array.isArray(t.urls)) {
-            t.urls.forEach(u => { if (u.url) resolvedUrls.push(u.url); });
-          }
-          if (t.text) {
-            const textUrls = t.text.match(/https?:\/\/[^\s]+/gi) || [];
-            textUrls.forEach(u => resolvedUrls.push(u));
-          }
+      const fxFull = await fetchFxTwitterFull(url);
+      if (fxFull) {
+        if (!postInfo || !postInfo.text) {
+          postInfo = postInfo || {};
+          postInfo.author = postInfo.author || fxFull.author?.name || 'Unknown';
+          postInfo.authorHandle = postInfo.authorHandle || '@' + (fxFull.author?.screen_name || 'unknown');
+          postInfo.text = postInfo.text || fxFull.text || '';
+          postInfo.date = postInfo.date || fxFull.created_at || null;
+        }
+        if (fxFull.card?.url) resolvedUrls.push(fxFull.card.url);
+        if (fxFull.card?.domain) resolvedUrls.push('https://' + fxFull.card.domain);
+        if (fxFull.card?.description) cardDescription = fxFull.card.description;
+        if (fxFull.urls) fxFull.urls.forEach(u => { if (u.url) resolvedUrls.push(u.url); });
+        if (fxFull.text) {
+          (fxFull.text.match(/https?:\/\/[^\s]+/gi) || []).forEach(u => resolvedUrls.push(u));
+        }
+        if (engagement) {
+          engagement.likes = engagement.likes ?? fxFull.likes ?? null;
+          engagement.retweets = engagement.retweets ?? fxFull.retweets ?? null;
+          engagement.replies = engagement.replies ?? fxFull.replies ?? null;
+          engagement.views = engagement.views ?? fxFull.views ?? null;
         }
       }
     } catch (e) { /* ignore */ }
 
-    // Analyze — append card description for better XORA detection
-    const auth = analyzeFromText(postInfo.text, postInfo.author, engagement);
+    // Syndication fallback
+    if (!engagement || Object.values(engagement).every(v => v === null)) {
+      const syn = await fetchSyndication(tweetId);
+      if (syn) {
+        if (!engagement) engagement = {};
+        engagement.likes = engagement.likes ?? syn.likes ?? null;
+        engagement.retweets = engagement.retweets ?? syn.retweets ?? null;
+        engagement.replies = engagement.replies ?? syn.replies ?? null;
+        engagement.views = engagement.views ?? syn.views?.count ?? syn.views ?? null;
+        engagement.quotes = engagement.quotes ?? syn.quotes ?? null;
+      }
+    }
+
+    if (!postInfo) return res.status(500).json({ error: 'Could not fetch tweet data.' });
+    postInfo.text = postInfo.text || '';
+    postInfo.authorHandle = postInfo.authorHandle || '@unknown';
+
+    console.log('[3/3] Analysis complete.');
+    const auth = analyzePost(postInfo.text, postInfo.author, engagement);
     const textForXora = postInfo.text + (cardDescription ? ' ' + cardDescription : '');
     const xora = analyzeXora(textForXora, postInfo.authorHandle, url, resolvedUrls);
 
-    res.json({
-      ok: true,
-      post: postInfo,
-      authenticity: auth,
-      xora: xora,
-      engagement: engagement || {},
-      source: 'fxtwitter'
-    });
-
+    res.json({ ok: true, post: postInfo, authenticity: auth, xora, engagement: engagement || {}, source: 'fxtwitter' });
   } catch (err) {
     console.error('Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── Replies endpoint ────────────────────────────────────────
 app.post('/api/replies', async (req, res) => {
   const { url, maxReplies } = req.body;
-
   if (!url || !url.match(/(x\.com|twitter\.com)\/\w+\/status\/\d+/)) {
     return res.status(400).json({ error: 'Invalid X/Twitter post URL' });
   }
-
   try {
-    console.log('[replies] Starting reply fetch for:', url);
+    console.log('[replies] Starting for:', url);
     const { replies, opHandle, error } = await fetchRepliesFromXcancel(url, maxReplies || 50);
     const analysis = analyzeReplyQuality(replies, opHandle);
-
-    res.json({
-      ok: true,
-      opHandle,
-      replyCount: replies.length,
-      analysis,
-      error: error || null
-    });
+    res.json({ ok: true, opHandle, replyCount: replies.length, analysis, error: error || null });
   } catch (err) {
     console.error('[replies] Error:', err.message);
     res.status(500).json({ error: err.message });
