@@ -237,7 +237,7 @@ function analyzeFromText(text, author, engagement) {
       hashtagCount: hashtags,
       emojiCount: emojis,
       hasCallToAction: /follow|like|rt|retweet|share|subscribe/i.test(text),
-      hasLink: /https?:\/\//i,
+      hasLink: /https?:\/\//i.test(text),
       sentiment: detectSentiment(text),
       engagement: engagement || {}
     }
