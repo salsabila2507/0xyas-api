@@ -37,67 +37,37 @@ async function fetchSyndication(tweetId) {
       }
     });
     if (!resp.ok) return null;
-    return await resp.json();
+    const data = await resp.json();
+    if (!data || Object.keys(data).length === 0) return null;
+    return data;
   } catch (e) {
     console.log('Syndication fetch failed:', e.message);
     return null;
   }
 }
 
-// ── Scrape tweet page for engagement via meta tags ───────────
-async function scrapeTweetPage(tweetUrl) {
+// ── fxtwitter API fetch (engagement metrics) ─────────────────
+async function fetchFxTwitter(tweetUrl) {
   try {
-    const resp = await fetch(tweetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9'
-      },
-      redirect: 'follow'
+    const fxUrl = 'https://api.fxtwitter.com/' + tweetUrl.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
+    const resp = await fetch(fxUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
     });
-    const html = await resp.text();
-
-    // Extract from og:meta tags
-    const likes = extractMetaContent(html, 'twitter162:likes', /\"like_count\":(\d+)/);
-    const retweets = extractMetaContent(html, 'twitter162:retweet_count', /\"retweet_count\":(\d+)/);
-    const replies = extractMetaContent(html, 'twitter162:reply_count', /\"reply_count\":(\d+)/);
-    const views = extractMetaContent(html, 'twitter162:impressions', /\"views_count\":(\d+)/) ||
-                  extractMetaContent(html, 'og:description', /(\d[\d,.]*)\s*(views|impressions)/i);
-    const quotes = extractMetaContent(html, 'twitter162:quote_count', /\"quote_count\":(\d+)/);
-
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const t = data.tweet;
+    if (!t) return null;
     return {
-      likes: parseCount(likes),
-      retweets: parseCount(retweets),
-      replies: parseCount(replies),
-      views: parseCount(views),
-      quotes: parseCount(quotes)
+      likes: t.likes ?? t.favorite_count ?? null,
+      retweets: t.retweets ?? t.retweet_count ?? null,
+      replies: t.replies ?? t.reply_count ?? null,
+      views: t.views ?? null,
+      quotes: t.quotes ?? t.quote_count ?? null
     };
   } catch (e) {
-    console.log('Scrape failed:', e.message);
+    console.log('fxtwitter fetch failed:', e.message);
     return null;
   }
-}
-
-function extractMetaContent(html, attrOrProp, regexFallback) {
-  // Try property attribute first
-  const propMatch = html.match(new RegExp('(?:property|name)="' + attrOrProp + '"[^>]*content="([^"]*)"'));
-  if (propMatch) return propMatch[1];
-  // Try regex fallback on full HTML
-  if (regexFallback) {
-    const m = html.match(regexFallback);
-    if (m) return m[1];
-  }
-  return null;
-}
-
-function parseCount(str) {
-  if (!str) return null;
-  str = str.toString().replace(/[,\s]/g, '');
-  if (/k$/i.test(str)) return Math.round(parseFloat(str) * 1000);
-  if (/m$/i.test(str)) return Math.round(parseFloat(str) * 1000000);
-  if (/b$/i.test(str)) return Math.round(parseFloat(str) * 1000000000);
-  const n = parseInt(str, 10);
-  return isNaN(n) ? null : n;
 }
 
 // ── Parse oembed HTML ────────────────────────────────────────
@@ -452,52 +422,90 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
-    // Step 1: Get oembed data (author, text, date)
-    console.log('[1/3] Fetching oembed data...');
-    const oembed = await fetchOembed(url);
-    const parsed = parseOembedHtml(oembed.html || '');
-
-    const postInfo = {
-      author: parsed.displayName || oembed.author_name || 'Unknown',
-      authorHandle: parsed.handle || '@' + (oembed.author_name || 'unknown'),
-      text: parsed.text || '(could not extract text)',
-      date: parsed.date || null,
-      url: url,
-      tweetId: tweetId
-    };
-
-    // Step 2: Fetch engagement via syndication API
-    console.log('[2/3] Fetching engagement metrics...');
+    // Step 1: Get post data — try oembed first, fxtwitter as fallback
+    console.log('[1/3] Fetching post data...');
+    let postInfo = null;
     let engagement = null;
 
-    const syndication = await fetchSyndication(tweetId);
-    if (syndication) {
-      engagement = {
-        likes: syndication.likes ?? syndication.favorite_count ?? null,
-        retweets: syndication.retweets ?? syndication.retweet_count ?? null,
-        replies: syndication.replies ?? syndication.reply_count ?? null,
-        views: syndication.views?.count ?? syndication.views ?? null,
-        quotes: syndication.quotes ?? syndication.quote_count ?? null
+    // Try oembed first
+    try {
+      const oembed = await fetchOembed(url);
+      const parsed = parseOembedHtml(oembed.html || '');
+      postInfo = {
+        author: parsed.displayName || oembed.author_name || 'Unknown',
+        authorHandle: parsed.handle || '@' + (oembed.author_name || 'unknown'),
+        text: parsed.text || null,
+        date: parsed.date || null,
+        url: url,
+        tweetId: tweetId
       };
-      console.log('  Syndication data:', JSON.stringify(engagement));
+    } catch (e) {
+      console.log('  Oembed failed:', e.message);
     }
 
-    // Step 3: Scrape page as fallback for missing metrics
-    console.log('[3/3] Scraping tweet page for engagement...');
-    const scraped = await scrapeTweetPage(url);
-    if (scraped) {
-      if (!engagement) engagement = {};
-      if (engagement.likes === null || engagement.likes === undefined) engagement.likes = scraped.likes;
-      if (engagement.retweets === null || engagement.retweets === undefined) engagement.retweets = scraped.retweets;
-      if (engagement.replies === null || engagement.replies === undefined) engagement.replies = scraped.replies;
-      if (engagement.views === null || engagement.views === undefined) engagement.views = scraped.views;
-      if (engagement.quotes === null || engagement.quotes === undefined) engagement.quotes = scraped.quotes;
-      console.log('  Scraped data:', JSON.stringify(scraped));
+    // fxtwitter for engagement + fill missing post info
+    console.log('[2/3] Fetching engagement via fxtwitter...');
+    const fxData = await fetchFxTwitter(url);
+    if (fxData) {
+      engagement = fxData;
+      console.log('  fxtwitter data:', JSON.stringify(engagement));
     }
+
+    // If oembed failed, try to get post info from fxtwitter's full tweet data
+    if (!postInfo || !postInfo.text || postInfo.text === '(could not extract text)') {
+      try {
+        const fxFullUrl = 'https://api.fxtwitter.com/' + url.replace(/https?:\/\/(www\.)?(x\.com|twitter\.com)\//, '');
+        const fxResp = await fetch(fxFullUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (fxResp.ok) {
+          const fxFull = await fxResp.json();
+          const t = fxFull.tweet;
+          if (t) {
+            postInfo = postInfo || {};
+            postInfo.author = postInfo.author || t.author?.name || 'Unknown';
+            postInfo.authorHandle = postInfo.authorHandle || '@' + (t.author?.screen_name || 'unknown');
+            postInfo.text = postInfo.text || t.text || '(could not extract text)';
+            postInfo.date = postInfo.date || t.created_at || null;
+            if (engagement) {
+              engagement.likes = engagement.likes ?? t.likes ?? null;
+              engagement.retweets = engagement.retweets ?? t.retweets ?? null;
+              engagement.replies = engagement.replies ?? t.replies ?? null;
+              engagement.views = engagement.views ?? t.views ?? null;
+            }
+            console.log('  fxtwitter full tweet data used for post info');
+          }
+        }
+      } catch (e) {
+        console.log('  fxtwitter full fetch failed:', e.message);
+      }
+    }
+
+    if (!postInfo) {
+      return res.status(500).json({ error: 'Could not fetch tweet data. The tweet may be deleted or private.' });
+    }
+
+    // Ensure required fields
+    postInfo.text = postInfo.text || '(could not extract text)';
+    postInfo.authorHandle = postInfo.authorHandle || '@unknown';
+
+    // Fallback: syndication API for missing engagement
+    if (!engagement || Object.values(engagement).every(v => v === null)) {
+      const syndication = await fetchSyndication(tweetId);
+      if (syndication) {
+        if (!engagement) engagement = {};
+        engagement.likes = engagement.likes ?? syndication.likes ?? syndication.favorite_count ?? null;
+        engagement.retweets = engagement.retweets ?? syndication.retweets ?? syndication.retweet_count ?? null;
+        engagement.replies = engagement.replies ?? syndication.replies ?? syndication.reply_count ?? null;
+        engagement.views = engagement.views ?? syndication.views?.count ?? syndication.views ?? null;
+        engagement.quotes = engagement.quotes ?? syndication.quotes ?? syndication.quote_count ?? null;
+        console.log('  Syndication fallback:', JSON.stringify(engagement));
+      }
+    }
+
+    console.log('[3/3] Analysis complete.');
 
     // Analyze
-    const auth = analyzeFromText(parsed.text || '', postInfo.author, engagement);
-    const xora = analyzeXora(parsed.text || '', postInfo.authorHandle, url);
+    const auth = analyzeFromText(postInfo.text, postInfo.author, engagement);
+    const xora = analyzeXora(postInfo.text, postInfo.authorHandle, url);
 
     res.json({
       ok: true,
@@ -505,7 +513,7 @@ app.post('/api/analyze', async (req, res) => {
       authenticity: auth,
       xora: xora,
       engagement: engagement || {},
-      source: syndication ? 'syndication+scrape' : 'oembed+scrape'
+      source: 'fxtwitter'
     });
 
   } catch (err) {
