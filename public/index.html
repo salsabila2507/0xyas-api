@@ -208,6 +208,28 @@ h1,h2,h3{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacin
 .flags-card.clean .flag-item{color:var(--cyan)}
 .flags-card.clean .flag-item::before{content:'✓';color:var(--cyan)}
 
+/* REPLY QUALITY */
+.rq-card{border-color:rgba(0,255,170,.15);margin-bottom:1rem}
+.rq-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem}
+.rq-title{font-size:.55rem;letter-spacing:2px;text-transform:uppercase;font-weight:700;color:var(--cyan)}
+.rq-badge{padding:.2rem .6rem;font-size:.45rem;letter-spacing:1.5px;text-transform:uppercase;border:1px solid;border-radius:2px;font-weight:700}
+.rq-badge.green{color:var(--cyan);border-color:rgba(0,255,170,.3);background:rgba(0,255,170,.05)}
+.rq-badge.yellow{color:var(--gold);border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.05)}
+.rq-badge.red{color:var(--pink);border-color:rgba(255,0,110,.3);background:rgba(255,0,110,.05)}
+.rq-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin-bottom:.8rem}
+.rq-stat{text-align:center;padding:.5rem;background:rgba(0,255,170,.03);border:1px solid rgba(0,255,170,.1);border-radius:2px}
+.rq-stat-val{font-size:.9rem;font-weight:700;color:var(--cyan);font-family:'Orbitron',monospace}
+.rq-stat-lbl{font-size:.4rem;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-top:.15rem}
+.rq-label{font-size:.52rem;color:var(--gold);margin-top:.6rem;padding:.4rem .6rem;background:rgba(251,191,36,.04);border-left:2px solid var(--gold);line-height:1.5}
+.rq-samples{margin-top:.8rem}
+.rq-sample{padding:.5rem;border-bottom:1px solid var(--border);font-size:.5rem;line-height:1.5}
+.rq-sample:last-child{border-bottom:none}
+.rq-sample-author{color:var(--purple);font-weight:700;margin-right:.4rem}
+.rq-sample-text{color:var(--text)}
+.rq-sample-meta{color:var(--muted);font-size:.4rem;margin-top:.2rem}
+.rq-sample.op{border-left:2px solid var(--gold);padding-left:.6rem;background:rgba(251,191,36,.03)}
+.rq-loading{font-size:.5rem;color:var(--muted);text-align:center;padding:1rem;letter-spacing:1px}
+
 /* LLM */
 .llm-card{border-color:rgba(139,92,246,.2);margin-bottom:1rem}
 .llm-card::before{background:linear-gradient(90deg,transparent,var(--purple),transparent)}
@@ -283,6 +305,7 @@ h1,h2,h3{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacin
         <div class="loading-step" id="step3"><div class="step-icon">3</div>Scanning reply patterns</div>
         <div class="loading-step" id="step4"><div class="step-icon">4</div>Checking XORA authenticity</div>
         <div class="loading-step" id="step5"><div class="step-icon">5</div>Running AI analysis</div>
+        <div class="loading-step" id="step6"><div class="step-icon">6</div>Loading replies & discussion</div>
       </div>
       <div class="loading-bar"><div class="loading-bar-fill" id="loadingBar"></div></div>
     </div>
@@ -296,6 +319,7 @@ h1,h2,h3{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacin
     <div id="xoraSection"></div>
     <div id="metricsRow"></div>
     <div id="breakdown"></div>
+    <div id="replyQualitySection"></div>
     <div id="redFlags"></div>
     <div id="llmSection"></div>
     <div class="actions">
@@ -400,25 +424,28 @@ function renderMetrics(sig){
 
 // ── RENDER BREAKDOWN ──────────────────────────────────────
 function renderBreakdown(sig,auth){
-  var sentColor=sig.sentiment==='positive'||sig.sentiment==='very_positive'?'var(--cyan)':
-    sig.sentiment==='negative'||sig.sentiment==='very_negative'?'var(--pink)':'var(--muted)';
-  var sentPct=sig.sentiment==='positive'||sig.sentiment==='very_positive'?80:
-    sig.sentiment==='negative'||sig.sentiment==='very_negative'?20:50;
+  var bd=auth.breakdown||[];
+  if(bd.length===0){document.getElementById('breakdown').innerHTML='';return}
 
-  var items=[
-    {key:'Text Length',val:(sig.textLength||0)+' chars',pct:Math.min(100,(sig.textLength||0)/3),bar:'bar-cyan'},
-    {key:'Word Count',val:(sig.wordCount||0)+' words',pct:Math.min(100,(sig.wordCount||0)/1.5),bar:'bar-purple'},
-    {key:'Sentiment',val:(sig.sentiment||'neutral').toUpperCase(),pct:sentPct,bar:sentPct>50?'bar-cyan':'bar-pink'},
-    {key:'Engagement Signals',val:sig.hasLink?'LINK':'NONE',pct:sig.hasLink?60:10,bar:sig.hasLink?'bar-gold':'bar-cyan'}
-  ];
-
-  var html='<div class="section-label">ANALYSIS BREAKDOWN</div><div class="card">';
-  items.forEach(function(i){
+  var html='<div class="section-label">SCORE BREAKDOWN</div><div class="card">';
+  bd.forEach(function(b){
+    var pct=0;
+    var barCls='bar-cyan';
+    if(b.pts>0){pct=Math.min(100,b.pts*5);barCls='bar-cyan'}
+    else if(b.pts<0){pct=Math.min(100,Math.abs(b.pts)*5);barCls='bar-pink'}
+    var ptsStr=b.pts>0?'+'+b.pts:b.pts===0?'±0':String(b.pts);
+    var ptsColor=b.pts>0?'var(--cyan)':b.pts<0?'var(--pink)':'var(--muted)';
     html+='<div class="bar-group">'+
-      '<div class="bar-header"><span class="bar-key">'+i.key+'</span><span class="bar-val" style="color:var(--cyan)">'+i.val+'</span></div>'+
-      '<div class="bar-track"><div class="bar-fill '+i.bar+'" style="--fill:'+i.pct+'%;width:'+i.pct+'%"></div></div>'+
+      '<div class="bar-header"><span class="bar-key">'+b.cat+'</span><span class="bar-val" style="color:'+ptsColor+'">'+ptsStr+' pts</span></div>'+
+      '<div class="bar-track"><div class="bar-fill '+barCls+'" style="--fill:'+pct+'%;width:'+pct+'%"></div></div>'+
+      '<div style="font-size:.48rem;color:var(--muted);margin-top:.15rem;line-height:1.4">'+b.detail+'</div>'+
     '</div>';
   });
+
+  // Label
+  if(auth.label){
+    html+='<div style="margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--border);font-size:.52rem;color:var(--gold);letter-spacing:1px">'+auth.label+'</div>';
+  }
   html+='</div>';
   document.getElementById('breakdown').innerHTML=html;
 }
@@ -426,13 +453,21 @@ function renderBreakdown(sig,auth){
 // ── RENDER FLAGS ──────────────────────────────────────────
 function renderFlags(auth){
   var html='<div class="card flags-card'+(auth.flags.length===0?' clean':'')+'">';
-  html+='<div class="flags-title '+(auth.flags.length===0?'green':'red')+'">'+(auth.flags.length===0?'CLEAN':'RED FLAGS')+' ('+auth.flags.length+')</div>';
+  html+='<div class="flags-title '+(auth.flags.length===0?'green':'red')+'">'+(auth.flags.length===0?'ALL CLEAN':'RED FLAGS')+' ('+auth.flags.length+')</div>';
   if(auth.flags.length===0){
     html+='<div class="flag-item">No suspicious patterns detected — content appears genuine</div>';
   }else{
     auth.flags.forEach(function(f){html+='<div class="flag-item">'+f+'</div>'});
   }
   html+='</div>';
+
+  // Green flags
+  if(auth.greenFlags&&auth.greenFlags.length>0){
+    html+='<div class="card flags-card clean">';
+    html+='<div class="flags-title green">POSITIVE SIGNALS ('+auth.greenFlags.length+')</div>';
+    auth.greenFlags.forEach(function(f){html+='<div class="flag-item">'+f+'</div>'});
+    html+='</div>';
+  }
   document.getElementById('redFlags').innerHTML=html;
 }
 
@@ -604,6 +639,67 @@ function renderXora(xora){
   document.getElementById('xoraSection').innerHTML=html;
 }
 
+// ── RENDER REPLY QUALITY ──────────────────────────────────
+function renderReplyQuality(rq){
+  if(!rq||rq.score===null){
+    document.getElementById('replyQualitySection').innerHTML=
+      '<div class="section-label">REPLY & DISCUSSION QUALITY</div>'+
+      '<div class="card rq-card"><div class="rq-loading">'+(rq?rq.detail||'No replies available':'Loading replies...')+'</div></div>';
+    return;
+  }
+
+  var tc=rq.trafficLight==='green'?'green':rq.trafficLight==='yellow'?'yellow':'red';
+  var badge=rq.trafficLight==='green'?'GENUINE':rq.trafficLight==='yellow'?'MIXED':'MANIPULATED';
+
+  var html='<div class="section-label">REPLY & DISCUSSION QUALITY</div>'+
+    '<div class="card rq-card">'+
+      '<div class="rq-header">'+
+        '<div class="rq-title">💬 COMMUNITY ANALYSIS</div>'+
+        '<div class="rq-badge '+tc+'">'+badge+' ('+rq.score+')</div>'+
+      '</div>'+
+      '<div class="rq-stats">'+
+        '<div class="rq-stat"><div class="rq-stat-val">'+rq.stats.totalReplies+'</div><div class="rq-stat-lbl">Replies</div></div>'+
+        '<div class="rq-stat"><div class="rq-stat-val">'+rq.stats.uniqueAuthors+'</div><div class="rq-stat-lbl">Unique Authors</div></div>'+
+        '<div class="rq-stat"><div class="rq-stat-val">'+rq.stats.opReplies+'</div><div class="rq-stat-lbl">OP Replies</div></div>'+
+        '<div class="rq-stat"><div class="rq-stat-val">'+rq.stats.substantiveReplies+'</div><div class="rq-stat-lbl">Substantive</div></div>'+
+      '</div>'+
+      '<div class="rq-label">'+rq.label+'</div>';
+
+  // Breakdown bars
+  if(rq.breakdown&&rq.breakdown.length>0){
+    rq.breakdown.forEach(function(b){
+      var pct=0;var barCls='bar-cyan';
+      if(b.pts>0){pct=Math.min(100,b.pts*5);barCls='bar-cyan'}
+      else if(b.pts<0){pct=Math.min(100,Math.abs(b.pts)*5);barCls='bar-pink'}
+      var ptsStr=b.pts>0?'+'+b.pts:b.pts===0?'±0':String(b.pts);
+      var ptsColor=b.pts>0?'var(--cyan)':b.pts<0?'var(--pink)':'var(--muted)';
+      html+='<div class="bar-group" style="margin-top:.4rem">'+
+        '<div class="bar-header"><span class="bar-key">'+b.cat+'</span><span class="bar-val" style="color:'+ptsColor+'">'+ptsStr+'</span></div>'+
+        '<div class="bar-track"><div class="bar-fill '+barCls+'" style="--fill:'+pct+'%;width:'+pct+'%"></div></div>'+
+        '<div style="font-size:.45rem;color:var(--muted);margin-top:.1rem">'+b.detail+'</div>'+
+      '</div>';
+    });
+  }
+
+  // Sample replies
+  if(rq.sampleReplies&&rq.sampleReplies.length>0){
+    html+='<div style="margin-top:.8rem;padding-top:.5rem;border-top:1px solid var(--border)">';
+    html+='<div style="font-size:.45rem;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">Sample Replies</div>';
+    rq.sampleReplies.forEach(function(r){
+      var opCls=r.isOP?'rq-sample op':'rq-sample';
+      html+='<div class="'+opCls+'">'+
+        '<span class="rq-sample-author">'+r.author+'</span>'+
+        '<span class="rq-sample-text">'+r.text+'</span>'+
+        '<div class="rq-sample-meta">'+formatNum(r.likes)+' likes · '+formatNum(r.replies)+' replies'+(r.isOP?' · <span style="color:var(--gold)">OP</span>':'')+'</div>'+
+      '</div>';
+    });
+    html+='</div>';
+  }
+
+  html+='</div>';
+  document.getElementById('replyQualitySection').innerHTML=html;
+}
+
 // ── RENDER LLM ───────────────────────────────────────────
 function renderLlm(llm){
   if(!llm){document.getElementById('llmSection').innerHTML='';return}
@@ -653,7 +749,7 @@ function setStep(n,txt){
     if(i===n-1)s.classList.add('active');
   });
   if(txt)document.getElementById('loadingText').textContent=txt;
-  document.getElementById('loadingBar').style.width=(n/5*100)+'%';
+  document.getElementById('loadingBar').style.width=(n/6*100)+'%';
 }
 
 // ── ANALYZE ──────────────────────────────────────────────
@@ -698,7 +794,23 @@ function analyzePost(){
 
     // Step 5 - LLM
     setStep(5,'Running AI analysis...');
-    return callGemini(d.post.text,d.post.author).then(function(llm){renderLlm(llm)});
+    var llmPromise=callGemini(d.post.text,d.post.author).then(function(llm){renderLlm(llm)});
+
+    // Step 6 - Replies
+    setStep(6,'Loading replies & discussion...');
+    document.getElementById('replyQualitySection').innerHTML=
+      '<div class="section-label">REPLY & DISCUSSION QUALITY</div>'+
+      '<div class="card rq-card"><div class="rq-loading">⏳ Scraping replies from X... this may take a moment</div></div>';
+
+    var repliesPromise=fetch(API_BASE+'/api/replies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:url,maxReplies:40})})
+      .then(function(r){return r.json()}).then(function(rd){
+        if(rd.ok&&rd.analysis){renderReplyQuality(rd.analysis)}
+        else{renderReplyQuality({score:null,detail:rd.error||'Could not load replies'})}
+      }).catch(function(e){
+        renderReplyQuality({score:null,detail:'Reply fetch failed: '+e.message});
+      });
+
+    return Promise.all([llmPromise,repliesPromise]);
   }).then(function(){
     document.getElementById('loadingBar').style.width='100%';
     setTimeout(function(){
