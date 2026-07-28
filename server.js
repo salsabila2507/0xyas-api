@@ -1292,15 +1292,42 @@ app.post('/api/verify-follow', express.json({ limit: '10mb' }), async (req, res)
 
   try {
     console.log('[verify-follow] Checking screenshot...');
-    const predictResp = await coastyPredict(
+    const body = JSON.stringify({
       screenshot,
-      'Look at this screenshot. Does it show that the user is FOLLOWING the account @coastyai on X/Twitter? Check for: a "Following" button (not "Follow"), or the account page showing "Following" status. Reply ONLY with "YES" if following, or "NO" if not following. Then briefly explain what you see in the screenshot.'
-    );
+      instruction: 'Look at this screenshot. Does it show that the user is FOLLOWING the account @coastyai on X/Twitter? Check for: a "Following" button (not "Follow"), or the account page showing "Following" status. The interface may be in Indonesian — "Mengikuti" means Following, "Ikuti" means Follow. Reply ONLY with "YES" if following, or "NO" if not following. Then briefly explain what you see.',
+      screen_width: 1280,
+      screen_height: 1200
+    });
+
+    let predictResp;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const resp = await fetch(COASTY_BASE + '/predict', {
+        method: 'POST',
+        headers: { 'X-API-Key': COASTY_API_KEY, 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(90000)
+      });
+      if (resp.ok) { predictResp = await resp.json(); break; }
+      const err = await resp.text();
+      const parsed = JSON.parse(err);
+      if (parsed.error?.retryable && attempt < 2) {
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      throw new Error(parsed.error?.message || 'Coasty API error');
+    }
 
     const reasoning = (predictResp.reasoning || '').toLowerCase();
-    const isVerified = reasoning.startsWith('yes') || reasoning.includes('following') && !reasoning.includes('not following') && !reasoning.includes('follow button');
+    // Strict check: must start with "yes" or explicitly confirm following (EN + ID)
+    const isVerified = reasoning.startsWith('yes')
+      || /^yes[\s.,!]/.test(reasoning)
+      || (reasoning.includes('is following') && !reasoning.includes('not following'))
+      || (reasoning.includes('are following') && !reasoning.includes('not following'))
+      || (reasoning.includes('following the account') && !reasoning.includes('not following'))
+      || (reasoning.includes('mengikuti') && !reasoning.includes('tidak mengikuti'))
+      || (reasoning.includes('sudah mengikuti') && !reasoning.includes('belum'));
 
-    console.log('[verify-follow] Result:', isVerified, '| Reasoning:', predictResp.reasoning?.substring(0, 100));
+    console.log('[verify-follow] Result:', isVerified);
 
     res.json({
       ok: true,
