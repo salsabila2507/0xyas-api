@@ -1285,60 +1285,12 @@ app.post('/api/visual', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-// Verify follow: screenshot → Coasty checks if user follows @coastyai
+// Verify follow: accept any screenshot, just let them in
 app.post('/api/verify-follow', express.json({ limit: '10mb' }), async (req, res) => {
   const { screenshot } = req.body;
   if (!screenshot) return res.status(400).json({ error: 'No screenshot provided' });
-
-  try {
-    console.log('[verify-follow] Checking screenshot...');
-    const body = JSON.stringify({
-      screenshot,
-      instruction: 'Look at this screenshot. Does it show that the user is FOLLOWING the account @coastyai on X/Twitter? Check for: a "Following" button (not "Follow"), or the account page showing "Following" status. The interface may be in Indonesian — "Mengikuti" means Following, "Ikuti" means Follow. Reply ONLY with "YES" if following, or "NO" if not following. Then briefly explain what you see.',
-      screen_width: 1280,
-      screen_height: 1200
-    });
-
-    let predictResp;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const resp = await fetch(COASTY_BASE + '/predict', {
-        method: 'POST',
-        headers: { 'X-API-Key': COASTY_API_KEY, 'Content-Type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(90000)
-      });
-      if (resp.ok) { predictResp = await resp.json(); break; }
-      const err = await resp.text();
-      const parsed = JSON.parse(err);
-      if (parsed.error?.retryable && attempt < 2) {
-        await new Promise(r => setTimeout(r, 2000));
-        continue;
-      }
-      throw new Error(parsed.error?.message || 'Coasty API error');
-    }
-
-    const reasoning = (predictResp.reasoning || '').toLowerCase();
-    // Strict check: must start with "yes" or explicitly confirm following (EN + ID)
-    const isVerified = reasoning.startsWith('yes')
-      || /^yes[\s.,!]/.test(reasoning)
-      || (reasoning.includes('is following') && !reasoning.includes('not following'))
-      || (reasoning.includes('are following') && !reasoning.includes('not following'))
-      || (reasoning.includes('following the account') && !reasoning.includes('not following'))
-      || (reasoning.includes('mengikuti') && !reasoning.includes('tidak mengikuti'))
-      || (reasoning.includes('sudah mengikuti') && !reasoning.includes('belum'));
-
-    console.log('[verify-follow] Result:', isVerified);
-
-    res.json({
-      ok: true,
-      verified: isVerified,
-      reasoning: predictResp.reasoning || '',
-      credits_used: predictResp.usage?.credits_charged || 0
-    });
-  } catch (err) {
-    console.error('[verify-follow] Error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  console.log('[verify-follow] Screenshot received, granting access');
+  res.json({ ok: true, verified: true, reasoning: 'Screenshot received.', credits_used: 0 });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
