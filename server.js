@@ -1285,6 +1285,35 @@ app.post('/api/visual', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Verify follow: screenshot → Coasty checks if user follows @coastyai
+app.post('/api/verify-follow', express.json({ limit: '10mb' }), async (req, res) => {
+  const { screenshot } = req.body;
+  if (!screenshot) return res.status(400).json({ error: 'No screenshot provided' });
+
+  try {
+    console.log('[verify-follow] Checking screenshot...');
+    const predictResp = await coastyPredict(
+      screenshot,
+      'Look at this screenshot. Does it show that the user is FOLLOWING the account @coastyai on X/Twitter? Check for: a "Following" button (not "Follow"), or the account page showing "Following" status. Reply ONLY with "YES" if following, or "NO" if not following. Then briefly explain what you see in the screenshot.'
+    );
+
+    const reasoning = (predictResp.reasoning || '').toLowerCase();
+    const isVerified = reasoning.startsWith('yes') || reasoning.includes('following') && !reasoning.includes('not following') && !reasoning.includes('follow button');
+
+    console.log('[verify-follow] Result:', isVerified, '| Reasoning:', predictResp.reasoning?.substring(0, 100));
+
+    res.json({
+      ok: true,
+      verified: isVerified,
+      reasoning: predictResp.reasoning || '',
+      credits_used: predictResp.usage?.credits_charged || 0
+    });
+  } catch (err) {
+    console.error('[verify-follow] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log('0XYAS API running on port ' + PORT);
 });
