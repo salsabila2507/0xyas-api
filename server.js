@@ -1108,6 +1108,139 @@ app.post('/api/llm', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════
+// COASTY VISUAL ANALYSIS
+// Playwright screenshots the post, Coasty vision API analyzes it
+// ══════════════════════════════════════════════════════════════
+
+const COASTY_API_KEY = process.env.COASTY_API_KEY;
+const COASTY_BASE = 'https://coasty.ai/v1';
+
+const { execSync } = require('child_process');
+
+async function screenshotTweet(url) {
+  const cleanUrl = url.replace('http://', 'https://');
+  const apiUrl = 'https://image.thum.io/get/width/1280/crop/1200/' + cleanUrl;
+
+  const resp = await fetch(apiUrl, {
+    signal: AbortSignal.timeout(30000),
+    headers: { 'Accept': 'image/png' }
+  });
+
+  if (!resp.ok) {
+    throw new Error('Screenshot API error: ' + resp.status);
+  }
+
+  const arrayBuf = await resp.arrayBuffer();
+  let buf = Buffer.from(arrayBuf);
+
+  // thum.io may return GIF — convert to PNG via ffmpeg
+  const header = buf.slice(0, 4).toString('ascii');
+  if (header.startsWith('GIF')) {
+    const tmpGif = '/tmp/screenshot_' + Date.now() + '.gif';
+    const tmpPng = '/tmp/screenshot_' + Date.now() + '.png';
+    require('fs').writeFileSync(tmpGif, buf);
+    execSync(`ffmpeg -y -i "${tmpGif}" "${tmpPng}" 2>/dev/null`);
+    buf = require('fs').readFileSync(tmpPng);
+    require('fs').unlinkSync(tmpGif);
+    require('fs').unlinkSync(tmpPng);
+  }
+
+  return buf;
+}
+
+async function analyzeVisual(screenshotBase64) {
+  if (!COASTY_API_KEY) {
+    throw new Error('Coasty API key not configured');
+  }
+
+  const body = JSON.stringify({
+    screenshot: screenshotBase64,
+    instruction: 'Analyze this X/Twitter post image. In your reasoning: describe what you see in detail, assess whether it looks original or manipulated, note any red flags or green flags, and rate visual authenticity 0-100. When done, click done.',
+    screen_width: 1280,
+    screen_height: 1200
+  });
+
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const resp = await fetch(COASTY_BASE + '/predict', {
+      method: 'POST',
+      headers: {
+        'X-API-Key': COASTY_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body,
+      signal: AbortSignal.timeout(90000)
+    });
+
+    if (resp.ok) return resp.json();
+
+    const err = await resp.text();
+    const parsed = JSON.parse(err);
+    if (parsed.error?.retryable && attempt < 2) {
+      console.log('[visual] Coasty', resp.status, 'retryable, attempt', attempt + 1);
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+    throw new Error('Coasty API error ' + resp.status + ': ' + err);
+  }
+}
+
+app.post('/api/visual', async (req, res) => {
+  const { url } = req.body;
+  if (!url || !url.match(/(x\.com|twitter\.com)\/\w+\/status\/\d+/)) {
+    return res.status(400).json({ error: 'Invalid X/Twitter post URL' });
+  }
+
+  try {
+    console.log('[visual] Capturing screenshot for:', url);
+    const startTime = Date.now();
+
+    // Step 1: Screenshot
+    const screenshotBuffer = await screenshotTweet(url);
+    const screenshotBase64 = screenshotBuffer.toString('base64');
+    console.log('[visual] Screenshot captured in', Date.now() - startTime, 'ms');
+
+    // Step 2: Send to Coasty
+    console.log('[visual] Sending to Coasty vision API...');
+    const predictResp = await analyzeVisual(screenshotBase64);
+    console.log('[visual] Coasty analysis done in', Date.now() - startTime, 'ms');
+
+    // Step 3: Parse visual analysis from Coasty response
+    const rawText = predictResp.reasoning || '';
+
+    // Heuristic scoring from reasoning text
+    let score = 50;
+    const lower = rawText.toLowerCase();
+    if (lower.includes('original') || lower.includes('authentic') || lower.includes('genuine')) score += 10;
+    if (lower.includes('professional') || lower.includes('high quality') || lower.includes('well-designed')) score += 10;
+    if (lower.includes('verified') || lower.includes('consistent')) score += 5;
+    if (lower.includes('stock') || lower.includes('watermark')) score -= 15;
+    if (lower.includes('manipulat') || lower.includes('fake') || lower.includes('edited') || lower.includes('deepfake')) score -= 20;
+    if (lower.includes('misleading') || lower.includes('deceptive')) score -= 15;
+    if (lower.includes('humor') || lower.includes('satire') || lower.includes('meme')) score += 5;
+    if (lower.includes('suspicious') || lower.includes('unusual')) score -= 10;
+    score = Math.max(0, Math.min(100, score));
+
+    const visual = {
+      description: rawText || 'Visual analysis completed',
+      score,
+      credits_used: predictResp.usage?.credits_charged || 0
+    };
+
+    res.json({
+      ok: true,
+      screenshot: screenshotBase64,
+      visual,
+      coasty_status: predictResp.status,
+      credits_used: predictResp.usage?.credits_charged || 0
+    });
+  } catch (err) {
+    console.error('[visual] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.listen(PORT, '0.0.0.0', () => {
