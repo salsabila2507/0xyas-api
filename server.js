@@ -1208,18 +1208,60 @@ app.post('/api/visual', async (req, res) => {
 
     // Step 3: Parse visual analysis from Coasty response
     const rawText = predictResp.reasoning || '';
-
-    // Heuristic scoring from reasoning text
-    let score = 50;
     const lower = rawText.toLowerCase();
-    if (lower.includes('original') || lower.includes('authentic') || lower.includes('genuine')) score += 10;
-    if (lower.includes('professional') || lower.includes('high quality') || lower.includes('well-designed')) score += 10;
-    if (lower.includes('verified') || lower.includes('consistent')) score += 5;
-    if (lower.includes('stock') || lower.includes('watermark')) score -= 15;
-    if (lower.includes('manipulat') || lower.includes('fake') || lower.includes('edited') || lower.includes('deepfake')) score -= 20;
-    if (lower.includes('misleading') || lower.includes('deceptive')) score -= 15;
-    if (lower.includes('humor') || lower.includes('satire') || lower.includes('meme')) score += 5;
-    if (lower.includes('suspicious') || lower.includes('unusual')) score -= 10;
+
+    // Extract Coasty's own authenticity score if mentioned (e.g. "85/100" or "~85")
+    let score = null;
+    const scoreMatch = rawText.match(/(?:~|approximately|about|around|visual authenticity[:\s]*|authenticity[:\s]*)(\d{1,3})\s*\/?\s*100/i)
+      || rawText.match(/(\d{1,3})\s*\/\s*100/i)
+      || rawText.match(/score[:\s]*(\d{1,3})/i);
+    if (scoreMatch) {
+      score = Math.max(0, Math.min(100, parseInt(scoreMatch[1])));
+    }
+
+    // Fallback: contextual sentiment analysis (not dumb keyword matching)
+    if (score === null) {
+      score = 50;
+      const posPhrases = ['authentic', 'genuine', 'original content', 'real', 'legitimate', 'verified account', 'consistent with'];
+      const negPhrases = ['deceptive', 'misleading', 'fake', 'scam', 'fraud', 'deepfake', 'stolen', 'impersonat'];
+      const contextPos = ['intentionally', 'marketing', 'designed', 'composite art', 'professionally made', 'promotional'];
+      const contextNeg = ['stock photo', 'watermark', 'no credit', 'unsourced'];
+
+      posPhrases.forEach(p => { if (lower.includes(p)) score += 8; });
+      negPhrases.forEach(p => { if (lower.includes(p)) score -= 12; });
+      contextPos.forEach(p => { if (lower.includes(p)) score += 3; });
+      contextNeg.forEach(p => { if (lower.includes(p)) score -= 8; });
+      score = Math.max(0, Math.min(100, score));
+    }
+
+    // === Post-processing adjustments ===
+
+    // 1. Image-text alignment boost: if Coasty says image matches/reinforces text
+    const alignPhrases = ['matches', 'reinforce', 'consistent with the', 'complements', 'aligns with', 'relates to', 'relevant to', 'depicts', 'shows'];
+    let alignCount = 0;
+    alignPhrases.forEach(p => { if (lower.includes(p)) alignCount++; });
+    if (alignCount >= 2) score += 15;       // strong alignment
+    else if (alignCount >= 1) score += 8;   // moderate alignment
+
+    // 2. Future date false positive fix: if Coasty flags "future date" but date is within 3 days of now
+    if (lower.includes('future date') || lower.includes('future-dated')) {
+      const dateMatch = rawText.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2}),?\s+(\d{4})/i);
+      if (dateMatch) {
+        const postDate = new Date(`${dateMatch[0]}`);
+        const now = new Date();
+        const diffDays = Math.abs(now - postDate) / (1000 * 60 * 60 * 24);
+        if (diffDays <= 3) score += 10; // within 3 days = not actually future, reduce penalty
+      }
+    }
+
+    // 3. Authenticity language boost: Coasty explicitly says "authentic" or "genuine"
+    if (lower.includes('looks authentic') || lower.includes('appears authentic') || lower.includes('looks real') || lower.includes('appears genuine')) score += 10;
+
+    // 4. Manipulation context: "composite" or "manipulated" in marketing/design context is OK
+    if ((lower.includes('composite') || lower.includes('manipulat')) && (lower.includes('marketing') || lower.includes('promotional') || lower.includes('designed') || lower.includes('composite art'))) {
+      score += 10; // reduce penalty for intentional design
+    }
+
     score = Math.max(0, Math.min(100, score));
 
     const visual = {
