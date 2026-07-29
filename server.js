@@ -1293,6 +1293,55 @@ app.post('/api/verify-follow', async (req, res) => {
   res.json({ ok: true, verified: true, reasoning: 'Screenshot received.', credits_used: 0 });
 });
 
+// Vision playground: user uploads image + prompt → Coasty analysis
+app.post('/api/vision-playground', async (req, res) => {
+  const { image, prompt } = req.body;
+  if (!image) return res.status(400).json({ error: 'No image provided' });
+  if (!prompt || !prompt.trim()) return res.status(400).json({ error: 'No prompt provided' });
+
+  const startTime = Date.now();
+  try {
+    const body = JSON.stringify({
+      screenshot: image,
+      instruction: prompt.trim(),
+      screen_width: 1280,
+      screen_height: 1200
+    });
+
+    let result;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const resp = await fetch(COASTY_BASE + '/predict', {
+        method: 'POST',
+        headers: { 'X-API-Key': COASTY_API_KEY, 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(90000)
+      });
+      if (resp.ok) { result = await resp.json(); break; }
+      const errText = await resp.text();
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed.error?.retryable && attempt < 2) {
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        throw new Error(parsed.error?.message || 'Coasty API error');
+      } catch (e) {
+        if (e.message !== parsed?.error?.message) throw e;
+      }
+    }
+
+    res.json({
+      ok: true,
+      response: result.reasoning || 'No response',
+      status: result.status,
+      credits_used: result.usage?.credits_charged || 0,
+      time_ms: Date.now() - startTime
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log('0XYAS API running on port ' + PORT);
 });
