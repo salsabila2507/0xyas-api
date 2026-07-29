@@ -1149,14 +1149,16 @@ async function screenshotTweet(url) {
   return buf;
 }
 
-async function analyzeVisual(screenshotBase64) {
+const VISUAL_DEFAULT_INSTRUCTION = 'Analyze this X/Twitter post image. In your reasoning: describe what you see in detail, assess whether it looks original or manipulated, note any red flags or green flags, and rate visual authenticity 0-100. When done, click done.';
+
+async function analyzeVisual(screenshotBase64, instruction) {
   if (!COASTY_API_KEY) {
     throw new Error('Coasty API key not configured');
   }
 
   const body = JSON.stringify({
     screenshot: screenshotBase64,
-    instruction: 'Analyze this X/Twitter post image. In your reasoning: describe what you see in detail, assess whether it looks original or manipulated, note any red flags or green flags, and rate visual authenticity 0-100. When done, click done.',
+    instruction: instruction || VISUAL_DEFAULT_INSTRUCTION,
     screen_width: 1280,
     screen_height: 1200
   });
@@ -1285,61 +1287,123 @@ app.post('/api/visual', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// ══════════════════════════════════════════════════════════════
+// WEB ANALYZER — screenshot any URL, Coasty vision + Gemini report
+// Reuses screenshotTweet (thum.io works for any URL) + analyzeVisual + Gemini
+// ══════════════════════════════════════════════════════════════
+
+async function callGeminiRaw(prompt, maxTokens) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('LLM not configured on this server');
+  const r = await fetch(GEMINI_BASE + '/models/' + GEMINI_MODEL + ':generateContent?key=' + key, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: maxTokens || 8192 }
+    }),
+    signal: AbortSignal.timeout(90000)
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error.message);
+  return d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+function parseJsonResponse(raw) {
+  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('LLM returned an invalid structured report');
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+function normalizeList(value) {
+  return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+}
+
+function normalizeWebReport(value, isClone) {
+  if (isClone) return {
+    sections: normalizeList(value.sections),
+    components: normalizeList(value.components),
+    frontend_notes: String(value.frontend_notes || '')
+  };
+  const scores = value.scores || {};
+  const score = n => Math.max(0, Math.min(10, Number(n) || 0));
+  return {
+    overview: String(value.overview || ''), design: value.design || {}, ux: value.ux || {},
+    conversion: value.conversion || {}, improvements: normalizeList(value.improvements),
+    scores: { design: score(scores.design), ux: score(scores.ux), conversion: score(scores.conversion), overall: score(scores.overall) }
+  };
+}
+
+app.post('/api/web-analyzer', async (req, res) => {
+  const { url, mode } = req.body;
+  let parsed;
+  try { parsed = new URL(url); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
+  if (!/^https?:$/.test(parsed.protocol)) return res.status(400).json({ error: 'URL must start with http:// or https://' });
+  if (!parsed.hostname || /^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(parsed.hostname)) {
+    return res.status(400).json({ error: 'Enter a public website URL' });
+  }
+
+  const isClone = mode === 'clone';
+  const startTime = Date.now();
+
+  try {
+    console.log('[web-analyzer] mode=%s url=%s', mode, url);
+
+    // Step 1: screenshot (thum.io, works for any URL)
+    const screenshotBuffer = await screenshotTweet(url);
+    const screenshotBase64 = screenshotBuffer.toString('base64');
+    console.log('[web-analyzer] screenshot %dms', Date.now() - startTime);
+
+    // Step 2: Coasty vision
+    const instruction = isClone
+      ? 'Analyze this website screenshot in detail for a design clone. Describe: overall layout grid, every visible section (header, nav, hero, features, cards, testimonials, footer), exact color palette (hex if guessable), typography (font style, sizes, weights), spacing rhythm, button styles, imagery, icons. Be exhaustive. When done, click done.'
+      : 'Analyze this website screenshot in detail. Describe: visual design, layout structure, navigation, typography, spacing, visual hierarchy, consistency, CTAs, trust signals, conversion elements, and user flow. Be thorough. When done, click done.';
+
+    const predictResp = await analyzeVisual(screenshotBase64, instruction);
+    const coastyReasoning = predictResp.reasoning || '';
+    console.log('[web-analyzer] coasty %dms', Date.now() - startTime);
+
+    // Step 3: Gemini report / codegen
+    const prompt = isClone
+      ? 'Return valid JSON only: {"sections":["string"],"components":["string"],"frontend_notes":"string"}. Based on the visual analysis, describe section order, reusable React/Next.js components, and Tailwind guidance. Visual design only; no private data, backend logic, or fake assets.\n\nVisual analysis:\n' + coastyReasoning
+      : 'Return valid JSON only: {"overview":"string","design":{"layout":"string","visual_design":"string"},"ux":{"navigation":"string","usability":"string","accessibility":"string"},"conversion":{"cta_visibility":"string","trust_signals":"string","user_journey":"string","problems":"string"},"improvements":["string"],"scores":{"design":0,"ux":0,"conversion":0,"overall":0}}. Scores must be 0-10. Be specific and actionable.\n\nVisual analysis:\n' + coastyReasoning;
+
+    const report = await callGeminiRaw(prompt, isClone ? 12000 : 8192);
+    console.log('[web-analyzer] gemini %dms', Date.now() - startTime);
+    const structuredReport = normalizeWebReport(parseJsonResponse(report), isClone);
+
+    // Extract scores (analyze mode)
+    let scores = null;
+    if (!isClone) {
+      const grab = (label) => { const m = report.replace(/\*\*/g,'').match(new RegExp(label + ':\\s*(\\d+(?:\\.\\d+)?)\\s*/\\s*10', 'i')); return m ? parseFloat(m[1]) : null; };
+      scores = { design: grab('Design'), ux: grab('UX'), conversion: grab('Conversion'), overall: grab('Overall') };
+    }
+
+    res.json({
+      ok: true,
+      url: parsed.href,
+      screenshot: screenshotBase64,
+      analysis: isClone ? null : structuredReport,
+      clone_design: isClone ? structuredReport : null,
+      coasty_reasoning: coastyReasoning,
+      credits_used: predictResp.usage?.credits_charged || 0,
+      elapsed: Date.now() - startTime
+    });
+  } catch (err) {
+    console.error('[web-analyzer] Error:', err.message);
+    const code = err.name === 'TimeoutError' || /timeout/i.test(err.message) ? 504 : 500;
+    res.status(code).json({ error: err.message });
+  }
+});
+
 // Verify follow: accept any screenshot, just let them in
 app.post('/api/verify-follow', async (req, res) => {
   const { screenshot } = req.body;
   if (!screenshot) return res.status(400).json({ error: 'No screenshot provided' });
   console.log('[verify-follow] Screenshot received, granting access');
   res.json({ ok: true, verified: true, reasoning: 'Screenshot received.', credits_used: 0 });
-});
-
-// Vision playground: user uploads image + prompt → Coasty analysis
-app.post('/api/vision-playground', async (req, res) => {
-  const { image, prompt } = req.body;
-  if (!image) return res.status(400).json({ error: 'No image provided' });
-  if (!prompt || !prompt.trim()) return res.status(400).json({ error: 'No prompt provided' });
-
-  const startTime = Date.now();
-  try {
-    const body = JSON.stringify({
-      screenshot: image,
-      instruction: prompt.trim(),
-      screen_width: 1280,
-      screen_height: 1200
-    });
-
-    let result;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const resp = await fetch(COASTY_BASE + '/predict', {
-        method: 'POST',
-        headers: { 'X-API-Key': COASTY_API_KEY, 'Content-Type': 'application/json' },
-        body,
-        signal: AbortSignal.timeout(90000)
-      });
-      if (resp.ok) { result = await resp.json(); break; }
-      const errText = await resp.text();
-      try {
-        const parsed = JSON.parse(errText);
-        if (parsed.error?.retryable && attempt < 2) {
-          await new Promise(r => setTimeout(r, 2000));
-          continue;
-        }
-        throw new Error(parsed.error?.message || 'Coasty API error');
-      } catch (e) {
-        if (e.message !== parsed?.error?.message) throw e;
-      }
-    }
-
-    res.json({
-      ok: true,
-      response: result.reasoning || 'No response',
-      status: result.status,
-      credits_used: result.usage?.credits_charged || 0,
-      time_ms: Date.now() - startTime
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
