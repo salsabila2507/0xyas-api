@@ -1140,7 +1140,7 @@ async function screenshotTweet(url) {
     const tmpGif = '/tmp/screenshot_' + Date.now() + '.gif';
     const tmpPng = '/tmp/screenshot_' + Date.now() + '.png';
     require('fs').writeFileSync(tmpGif, buf);
-    execSync(`ffmpeg -y -i "${tmpGif}" "${tmpPng}" 2>/dev/null`);
+    execSync(`ffmpeg -y -i "${tmpGif}" -frames:v 1 "${tmpPng}" 2>/dev/null`);
     buf = require('fs').readFileSync(tmpPng);
     require('fs').unlinkSync(tmpGif);
     require('fs').unlinkSync(tmpPng);
